@@ -4,3 +4,5 @@ dist/
 .env
 .keys/
 daemon/target/
+mesh/*/inbox/
+mesh/*/outbox/
