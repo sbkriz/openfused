@@ -1,0 +1,60 @@
+{
+  "name": "openfused",
+  "version": "0.2.1",
+  "description": "Decentralized context mesh for AI agents. Persistent memory, signed messaging, FUSE filesystem. The protocol is files.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "openfuse": "./dist/cli.js"
+  },
+  "main": "./dist/store.js",
+  "types": "./dist/store.d.ts",
+  "files": [
+    "dist",
+    "templates",
+    "wearethecompute.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build",
+    "start": "node dist/cli.js"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.0",
+    "commander": "^13.0.0",
+    "nanoid": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.15",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wearethecompute/openfused.git"
+  },
+  "homepage": "https://github.com/wearethecompute/openfused",
+  "keywords": [
+    "ai",
+    "agent",
+    "context",
+    "mesh",
+    "fuse",
+    "decentralized",
+    "openclaw",
+    "llm",
+    "claude",
+    "openai",
+    "mcp",
+    "ai-agent",
+    "shared-context",
+    "persistent-memory",
+    "ed25519",
+    "signed-messages"
+  ]
+}
