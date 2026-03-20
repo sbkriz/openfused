@@ -1,8 +1,8 @@
 [package]
 name = "openfuse"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
-description = "Persistent, shareable, portable context for AI agents"
+description = "Decentralized context mesh for AI agents — sync, encrypt, sign"
 license = "MIT"
 repository = "https://github.com/wearethecompute/openfused"
 homepage = "https://github.com/wearethecompute/openfused"
@@ -21,8 +21,10 @@ notify = "7"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand = "0.8"
 base64 = "0.22"
-pem = "3"
 chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1"
 hex = "0.4"
 tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+age = "0.11"
+sha2 = "0.10"

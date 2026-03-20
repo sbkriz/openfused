@@ -1,13 +1,18 @@
-mod store;
 mod crypto;
+mod store;
+mod sync;
 mod watch;
 
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use anyhow::Result;
 
 #[derive(Parser)]
-#[command(name = "openfuse", about = "Persistent, shareable, portable context for AI agents", version = "0.1.0")]
+#[command(
+    name = "openfuse",
+    about = "Decentralized context mesh for AI agents. The protocol is files.",
+    version = "0.3.0"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -15,7 +20,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize a new context store in the current directory
+    /// Initialize a new context store
     Init {
         #[arg(short, long, default_value = "agent")]
         name: String,
@@ -64,10 +69,17 @@ enum Commands {
         #[command(subcommand)]
         subcommand: PeerCommands,
     },
-    /// Show this agent's public key
+    /// Manage keys and keyring
     Key {
+        #[command(subcommand)]
+        subcommand: KeyCommands,
+    },
+    /// Sync with peers (pull context, push outbox)
+    Sync {
         #[arg(short, long, default_value = ".")]
         dir: PathBuf,
+        /// Sync only this peer (by name or ID)
+        peer: Option<String>,
     },
 }
 
@@ -96,7 +108,7 @@ enum PeerCommands {
         #[arg(short, long, default_value = ".")]
         dir: PathBuf,
     },
-    /// Add a peer by URL
+    /// Add a peer by URL (http:// for WAN, ssh://host:/path for LAN)
     Add {
         url: String,
         #[arg(short, long, default_value = ".")]
@@ -112,9 +124,50 @@ enum PeerCommands {
         #[arg(short, long, default_value = ".")]
         dir: PathBuf,
     },
-    /// Trust a peer's public key
+}
+
+#[derive(Subcommand)]
+enum KeyCommands {
+    /// Show this agent's public keys
+    Show {
+        #[arg(short, long, default_value = ".")]
+        dir: PathBuf,
+    },
+    /// List all keys in the keyring (like gpg --list-keys)
+    List {
+        #[arg(short, long, default_value = ".")]
+        dir: PathBuf,
+    },
+    /// Import a peer's keys and add to keyring
+    Import {
+        /// Name for this key (e.g. "wisp")
+        name: String,
+        /// Signing key file (hex ed25519 public key)
+        signing_key_file: PathBuf,
+        #[arg(short, long, default_value = ".")]
+        dir: PathBuf,
+        /// age encryption key (age1...) — if not provided, messages won't be encrypted
+        #[arg(short, long)]
+        encryption_key: Option<String>,
+        /// Address (e.g. "wisp@alice.local")
+        #[arg(short = '@', long)]
+        address: Option<String>,
+    },
+    /// Trust a key in the keyring
     Trust {
-        public_key_file: PathBuf,
+        /// Name or fingerprint
+        name: String,
+        #[arg(short, long, default_value = ".")]
+        dir: PathBuf,
+    },
+    /// Revoke trust for a key
+    Untrust {
+        name: String,
+        #[arg(short, long, default_value = ".")]
+        dir: PathBuf,
+    },
+    /// Export this agent's public keys for sharing
+    Export {
         #[arg(short, long, default_value = ".")]
         dir: PathBuf,
     },
@@ -127,77 +180,82 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Init { name, dir } => {
             let dir = dir.canonicalize().unwrap_or(dir.clone());
-            let store = store::ContextStore::new(&dir);
-            if store.exists() {
+            let s = store::ContextStore::new(&dir);
+            if s.exists() {
                 eprintln!("Context store already exists at {}", dir.display());
                 std::process::exit(1);
             }
             let id = nanoid::nanoid!(12);
-            store.init(&name, &id)?;
+            s.init(&name, &id)?;
             println!("Initialized context store: {}", dir.display());
+            let config = s.read_config()?;
             println!("  Agent ID: {}", id);
             println!("  Name: {}", name);
-            println!("  Signing keys: generated (.keys/)");
-            println!("\nStructure:");
-            println!("  CONTEXT.md  — working memory (edit this)");
-            println!("  SOUL.md     — agent identity & rules");
-            println!("  inbox/      — messages from other agents");
-            println!("  shared/     — files shared with the mesh");
-            println!("  knowledge/  — persistent knowledge base");
-            println!("  history/    — conversation & decision logs");
+            println!("  Signing key: {}", config.public_key.as_deref().unwrap_or("?"));
+            println!(
+                "  Encryption key: {}",
+                config.encryption_key.as_deref().unwrap_or("?")
+            );
+            println!(
+                "  Fingerprint: {}",
+                crypto::fingerprint(config.public_key.as_deref().unwrap_or(""))
+            );
         }
 
         Commands::Status { dir } => {
-            let store = store::ContextStore::new(&dir);
-            if !store.exists() {
+            let s = store::ContextStore::new(&dir);
+            if !s.exists() {
                 eprintln!("No context store found. Run `openfuse init` first.");
                 std::process::exit(1);
             }
-            let s = store.status()?;
-            println!("Agent: {} ({})", s.name, s.id);
-            println!("Peers: {}", s.peers);
-            println!("Inbox: {} messages", s.inbox_count);
-            println!("Shared: {} files", s.shared_count);
+            let st = s.status()?;
+            println!("Agent: {} ({})", st.name, st.id);
+            println!("Peers: {}", st.peers);
+            println!("Inbox: {} messages", st.inbox_count);
+            println!("Shared: {} files", st.shared_count);
         }
 
         Commands::Context { dir, set, append } => {
-            let store = store::ContextStore::new(&dir);
+            let s = store::ContextStore::new(&dir);
             if let Some(text) = set {
-                store.write_context(&text)?;
+                s.write_context(&text)?;
                 println!("Context updated.");
             } else if let Some(text) = append {
-                let existing = store.read_context()?;
+                let existing = s.read_context()?;
                 let text = text.replace("\\n", "\n");
-                store.write_context(&format!("{}\n{}", existing, text))?;
+                s.write_context(&format!("{}\n{}", existing, text))?;
                 println!("Context appended.");
             } else {
-                let content = store.read_context()?;
-                print!("{}", content);
+                print!("{}", s.read_context()?);
             }
         }
 
         Commands::Soul { dir, set } => {
-            let store = store::ContextStore::new(&dir);
+            let s = store::ContextStore::new(&dir);
             if let Some(text) = set {
-                store.write_soul(&text)?;
+                s.write_soul(&text)?;
                 println!("Soul updated.");
             } else {
-                let content = store.read_soul()?;
-                print!("{}", content);
+                print!("{}", s.read_soul()?);
             }
         }
 
         Commands::Inbox { subcommand } => match subcommand {
             InboxCommands::List { dir, raw } => {
-                let store = store::ContextStore::new(&dir);
-                let messages = store.read_inbox()?;
+                let s = store::ContextStore::new(&dir);
+                let messages = s.read_inbox()?;
                 if messages.is_empty() {
                     println!("Inbox is empty.");
                     return Ok(());
                 }
                 for msg in messages {
-                    let badge = if msg.verified { "[VERIFIED]" } else { "[UNVERIFIED]" };
-                    println!("\n--- {} From: {} | {} ---", badge, msg.from, msg.time);
+                    let badge = if msg.verified {
+                        "[VERIFIED]"
+                    } else {
+                        "[UNVERIFIED]"
+                    };
+                    let enc = if msg.encrypted { " [ENCRYPTED]" } else { "" };
+                    println!("\n--- {} {} From: {} | {} ---", badge, enc, msg.from, msg.time);
                     if raw {
                         println!("{}", msg.content);
                     } else {
@@ -205,41 +263,56 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-            InboxCommands::Send { peer_id, message, dir } => {
-                let store = store::ContextStore::new(&dir);
-                let config = store.read_config()?;
-                store.send_inbox(&peer_id, &message, &config.id)?;
-                println!("Message sent to {}'s inbox.", peer_id);
+            InboxCommands::Send {
+                peer_id,
+                message,
+                dir,
+            } => {
+                let s = store::ContextStore::new(&dir);
+                let config = s.read_config()?;
+                s.send_inbox(&peer_id, &message, &config.id)?;
+
+                // Check if message was encrypted
+                let entry = config.keyring.iter().find(|e| {
+                    e.name == peer_id || e.address.starts_with(&format!("{}@", peer_id))
+                });
+                let encrypted = entry.and_then(|e| e.encryption_key.as_ref()).is_some();
+                if encrypted {
+                    println!("Message encrypted and sent to {}'s outbox.", peer_id);
+                } else {
+                    println!("Message sent to {}'s outbox (unencrypted — no age key on file).", peer_id);
+                }
             }
         },
 
         Commands::Watch { dir } => {
-            let store = store::ContextStore::new(&dir);
-            if !store.exists() {
+            let s = store::ContextStore::new(&dir);
+            if !s.exists() {
                 eprintln!("No context store found. Run `openfuse init` first.");
                 std::process::exit(1);
             }
-            let config = store.read_config()?;
+            let config = s.read_config()?;
             println!("Watching context store: {} ({})", config.name, config.id);
             println!("Press Ctrl+C to stop.\n");
-            watch::watch_store(store.root())?;
+            watch::watch_store(s.root())?;
         }
 
         Commands::Share { file, dir } => {
-            let store = store::ContextStore::new(&dir);
+            let s = store::ContextStore::new(&dir);
             let content = std::fs::read_to_string(&file)?;
-            let filename = file.file_name()
+            let filename = file
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("file")
                 .to_string();
-            store.share(&filename, &content)?;
+            s.share(&filename, &content)?;
             println!("Shared: {}", filename);
         }
 
         Commands::Peer { subcommand } => match subcommand {
             PeerCommands::List { dir } => {
-                let store = store::ContextStore::new(&dir);
-                let config = store.read_config()?;
+                let s = store::ContextStore::new(&dir);
+                let config = s.read_config()?;
                 if config.peers.is_empty() {
                     println!("No peers connected.");
                     return Ok(());
@@ -248,52 +321,214 @@ async fn main() -> Result<()> {
                     println!("  {} ({}) — {} [{}]", p.name, p.id, p.url, p.access);
                 }
             }
-            PeerCommands::Add { url, dir, name, access } => {
-                let store = store::ContextStore::new(&dir);
-                let mut config = store.read_config()?;
+            PeerCommands::Add {
+                url,
+                dir,
+                name,
+                access,
+            } => {
+                let s = store::ContextStore::new(&dir);
+                let mut config = s.read_config()?;
                 let peer_id = nanoid::nanoid!(12);
-                let peer_name = name.clone().unwrap_or_else(|| format!("peer-{}", config.peers.len() + 1));
-                let name_display = peer_name.clone();
+                let peer_name =
+                    name.clone().unwrap_or_else(|| format!("peer-{}", config.peers.len() + 1));
                 config.peers.push(store::PeerConfig {
                     id: peer_id,
-                    name: peer_name,
+                    name: peer_name.clone(),
                     url: url.clone(),
                     access: access.clone(),
                     mount_path: None,
                 });
-                store.write_config(&config)?;
-                println!("Added peer: {} ({}) [{}]", name_display, url, access);
+                s.write_config(&config)?;
+                println!("Added peer: {} ({}) [{}]", peer_name, url, access);
             }
             PeerCommands::Remove { id, dir } => {
-                let store = store::ContextStore::new(&dir);
-                let mut config = store.read_config()?;
+                let s = store::ContextStore::new(&dir);
+                let mut config = s.read_config()?;
                 config.peers.retain(|p| p.id != id && p.name != id);
-                store.write_config(&config)?;
+                s.write_config(&config)?;
                 println!("Removed peer: {}", id);
-            }
-            PeerCommands::Trust { public_key_file, dir } => {
-                let store = store::ContextStore::new(&dir);
-                let mut config = store.read_config()?;
-                let pub_key = std::fs::read_to_string(&public_key_file)?.trim().to_string();
-                let trusted = config.trusted_keys.get_or_insert_with(Vec::new);
-                if trusted.contains(&pub_key) {
-                    println!("Key already trusted.");
-                    return Ok(());
-                }
-                trusted.push(pub_key);
-                store.write_config(&config)?;
-                println!("Key trusted. Messages signed with this key will show as [VERIFIED].");
             }
         },
 
-        Commands::Key { dir } => {
-            let store = store::ContextStore::new(&dir);
-            let config = store.read_config()?;
-            if let Some(pk) = config.public_key {
-                println!("{}", pk);
-            } else {
-                eprintln!("No keys found. Run `openfuse init` first.");
+        Commands::Key { subcommand } => match subcommand {
+            KeyCommands::Show { dir } => {
+                let s = store::ContextStore::new(&dir);
+                let config = s.read_config()?;
+                let pk = config.public_key.as_deref().unwrap_or("(none)");
+                let ek = config.encryption_key.as_deref().unwrap_or("(none)");
+                let fp = crypto::fingerprint(pk);
+                println!("Signing key:    {}", pk);
+                println!("Encryption key: {}", ek);
+                println!("Fingerprint:    {}", fp);
+            }
+            KeyCommands::List { dir } => {
+                let s = store::ContextStore::new(&dir);
+                let config = s.read_config()?;
+
+                // Show our own key first
+                let pk = config.public_key.as_deref().unwrap_or("?");
+                let ek = config.encryption_key.as_deref().unwrap_or("?");
+                println!(
+                    "{}  (self)\n  signing:    {}\n  encryption: {}\n  fingerprint: {}\n",
+                    config.name,
+                    pk,
+                    ek,
+                    crypto::fingerprint(pk)
+                );
+
+                if config.keyring.is_empty() {
+                    println!("Keyring is empty. Import keys with: openfuse key import <name> <keyfile>");
+                    return Ok(());
+                }
+
+                for entry in &config.keyring {
+                    let trust = if entry.trusted {
+                        "[TRUSTED]"
+                    } else {
+                        "[untrusted]"
+                    };
+                    let addr = if entry.address.is_empty() {
+                        "(no address)".to_string()
+                    } else {
+                        entry.address.clone()
+                    };
+                    let enc = entry
+                        .encryption_key
+                        .as_deref()
+                        .unwrap_or("(no age key)");
+                    println!(
+                        "{}  {}  {}\n  signing:    {}\n  encryption: {}\n  fingerprint: {}\n",
+                        entry.name, addr, trust, entry.signing_key, enc, entry.fingerprint
+                    );
+                }
+            }
+            KeyCommands::Import {
+                name,
+                signing_key_file,
+                dir,
+                encryption_key,
+                address,
+            } => {
+                let s = store::ContextStore::new(&dir);
+                let mut config = s.read_config()?;
+
+                let signing_key = std::fs::read_to_string(&signing_key_file)?.trim().to_string();
+                let fp = crypto::fingerprint(&signing_key);
+                let addr = address.unwrap_or_default();
+
+                // Check for duplicate
+                if config.keyring.iter().any(|e| e.signing_key == signing_key) {
+                    println!("Key already in keyring (fingerprint: {})", fp);
+                    return Ok(());
+                }
+
+                config.keyring.push(crypto::KeyringEntry {
+                    name: name.clone(),
+                    address: addr.clone(),
+                    signing_key,
+                    encryption_key,
+                    fingerprint: fp.clone(),
+                    trusted: false,
+                    added: chrono::Utc::now().to_rfc3339(),
+                });
+                s.write_config(&config)?;
+
+                println!("Imported key for: {}", name);
+                if !addr.is_empty() {
+                    println!("  Address: {}", addr);
+                }
+                println!("  Fingerprint: {}", fp);
+                println!("\nKey is NOT trusted yet. Run: openfuse key trust {}", name);
+            }
+            KeyCommands::Trust { name, dir } => {
+                let s = store::ContextStore::new(&dir);
+                let mut config = s.read_config()?;
+                let idx = config
+                    .keyring
+                    .iter()
+                    .position(|e| e.name == name || e.fingerprint == name);
+                match idx {
+                    Some(i) => {
+                        config.keyring[i].trusted = true;
+                        let kname = config.keyring[i].name.clone();
+                        let kfp = config.keyring[i].fingerprint.clone();
+                        s.write_config(&config)?;
+                        println!("Trusted: {} ({})", kname, kfp);
+                    }
+                    None => {
+                        eprintln!("Key not found: {}", name);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            KeyCommands::Untrust { name, dir } => {
+                let s = store::ContextStore::new(&dir);
+                let mut config = s.read_config()?;
+                let idx = config
+                    .keyring
+                    .iter()
+                    .position(|e| e.name == name || e.fingerprint == name);
+                match idx {
+                    Some(i) => {
+                        config.keyring[i].trusted = false;
+                        let kname = config.keyring[i].name.clone();
+                        let kfp = config.keyring[i].fingerprint.clone();
+                        s.write_config(&config)?;
+                        println!("Revoked trust: {} ({})", kname, kfp);
+                    }
+                    None => {
+                        eprintln!("Key not found: {}", name);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            KeyCommands::Export { dir } => {
+                let s = store::ContextStore::new(&dir);
+                let config = s.read_config()?;
+                let pk = config.public_key.as_deref().unwrap_or("");
+                let ek = config.encryption_key.as_deref().unwrap_or("");
+                // Output in a format that's easy to share
+                println!("# OpenFuse key export: {} ({})", config.name, config.id);
+                println!("# Fingerprint: {}", crypto::fingerprint(pk));
+                println!("signing:{}", pk);
+                println!("encryption:{}", ek);
+            }
+        },
+
+        Commands::Sync { dir, peer } => {
+            let s = store::ContextStore::new(&dir);
+            if !s.exists() {
+                eprintln!("No context store found. Run `openfuse init` first.");
                 std::process::exit(1);
+            }
+
+            let results = if let Some(ref name) = peer {
+                vec![sync::sync_one(&s, name).await?]
+            } else {
+                sync::sync_all(&s).await?
+            };
+
+            for r in &results {
+                println!("--- {} ---", r.peer_name);
+                if !r.pulled.is_empty() {
+                    println!("  pulled: {}", r.pulled.join(", "));
+                }
+                if !r.pushed.is_empty() {
+                    println!("  pushed: {}", r.pushed.join(", "));
+                }
+                if !r.errors.is_empty() {
+                    for e in &r.errors {
+                        eprintln!("  error: {}", e);
+                    }
+                }
+                if r.pulled.is_empty() && r.pushed.is_empty() && r.errors.is_empty() {
+                    println!("  (nothing to sync)");
+                }
+            }
+
+            if results.is_empty() {
+                println!("No peers configured. Add one with: openfuse peer add <url>");
             }
         }
     }

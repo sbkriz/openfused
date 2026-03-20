@@ -1,6 +1,6 @@
 # OpenFused
 
-Decentralized context mesh for AI agents. Persistent memory, signed messaging, FUSE filesystem. The protocol is files.
+Decentralized context mesh for AI agents. Persistent memory, encrypted messaging, peer sync. The protocol is files.
 
 ## What is this?
 
@@ -20,13 +20,14 @@ This creates a context store:
 ```
 CONTEXT.md     — working memory (what's happening now)
 SOUL.md        — agent identity, rules, capabilities
-inbox/         — messages from other agents
+inbox/         — messages from other agents (encrypted)
 outbox/        — sent message copies
-shared/        — files shared with the mesh
+shared/        — files shared with the mesh (plaintext)
 knowledge/     — persistent knowledge base
 history/       — conversation & decision logs
-.keys/         — ed25519 signing keypair (auto-generated)
-.mesh.json     — mesh config, peers, trusted keys
+.keys/         — ed25519 signing + age encryption keypairs
+.mesh.json     — mesh config, peers, keyring
+.peers/        — synced peer context (auto-populated)
 ```
 
 ## Usage
@@ -36,10 +37,10 @@ history/       — conversation & decision logs
 openfuse context
 openfuse context --append "## Update\nFinished the research phase."
 
-# Send a signed message to another agent
+# Send a message (auto-encrypted if peer's age key is on file)
 openfuse inbox send agent-bob "Check out shared/findings.md"
 
-# Read inbox (shows verified/unverified status)
+# Read inbox (decrypts, shows verified/unverified status)
 openfuse inbox list
 
 # Watch for incoming messages in real-time
@@ -48,26 +49,95 @@ openfuse watch
 # Share a file with the mesh
 openfuse share ./report.pdf
 
-# Show your public key (share with peers)
-openfuse key
+# Sync with all peers (pull context, push outbox)
+openfuse sync
 
-# Trust a peer's public key
-openfuse peer trust ./bobs-key.pem
-
-# Manage peers
-openfuse peer add https://agent-bob.example.com
-openfuse peer list
-openfuse status
+# Sync with one peer
+openfuse sync bob
 ```
+
+## Keys & Keyring
+
+Every agent gets two keypairs on init:
+
+- **Ed25519** — message signing (proves who sent it)
+- **age** — message encryption (only recipient can read it)
+
+```bash
+# Show your keys
+openfuse key show
+
+# Export keys for sharing with peers
+openfuse key export
+
+# Import a peer's keys
+openfuse key import wisp ./wisp-signing.key \
+  --encryption-key "age1xyz..." \
+  --address "wisp@alice.local"
+
+# Trust a key (verified messages show [VERIFIED])
+openfuse key trust wisp
+
+# List all keys (like gpg --list-keys)
+openfuse key list
+```
+
+Output looks like:
+
+```
+my-agent  (self)
+  signing:    50282bc5...
+  encryption: age1r9qd5fpt...
+  fingerprint: 0EC3:BE39:C64D:8F15:9DEF:B74C:F448:6645
+
+wisp  wisp@alice.local  [TRUSTED]
+  signing:    8904f73e...
+  encryption: age1z5wm7l4s...
+  fingerprint: 2CC7:8684:42E5:B304:1AC2:D870:7E20:9871
+```
+
+## Encryption
+
+Inbox messages are **encrypted with age** (X25519 + ChaCha20-Poly1305) and **signed with Ed25519**. Encrypt-then-sign: the ciphertext is encrypted for the recipient, then signed by the sender.
+
+- If you have a peer's age key → messages are encrypted automatically
+- If you don't → messages are signed but sent in plaintext
+- `shared/` and `knowledge/` directories stay plaintext (they're public)
+
+The `age` format is interoperable — Rust CLI and TypeScript SDK use the same keys and format.
+
+## Sync
+
+Pull peer context and push outbox messages. Two transports:
+
+```bash
+# LAN — rsync over SSH (uses your ~/.ssh/config for host aliases)
+openfuse peer add ssh://alice.local:/home/agent/context --name wisp
+
+# WAN — HTTP against the OpenFused daemon
+openfuse peer add http://agent.example.com:9781 --name wisp
+
+# Sync all peers
+openfuse sync
+
+# Sync one peer
+openfuse sync wisp
+```
+
+Sync pulls: `CONTEXT.md`, `SOUL.md`, `shared/`, `knowledge/` into `.peers/<name>/`.
+Sync pushes: outbox messages to the peer's inbox.
+
+SSH transport passes the hostname straight to rsync, so SSH config aliases work — you use `alice.local` not `107.175.249.104`.
 
 ## Security
 
-Every message is **Ed25519 signed**. When an agent receives a message:
+Every message is **Ed25519 signed** and optionally **age encrypted**.
 
-- **[VERIFIED]** — signature valid AND sender's key is in your trust list
+- **[VERIFIED] [ENCRYPTED]** — signature valid, key trusted, content was encrypted
+- **[VERIFIED]** — signature valid, key trusted, plaintext
 - **[UNVERIFIED]** — unsigned, invalid signature, or untrusted key
 
-All incoming messages are wrapped in `<external_message>` tags so the LLM knows what's trusted and what isn't:
+Incoming messages are wrapped in `<external_message>` tags so the LLM knows what's trusted:
 
 ```xml
 <external_message from="agent-bob" verified="true" status="verified">
@@ -75,37 +145,44 @@ Hey, the research is done. Check shared/findings.md
 </external_message>
 ```
 
-Unsigned messages or prompt injection attempts are clearly marked `UNVERIFIED`.
-
 ## FUSE Daemon (Rust)
 
-The `openfused` daemon lets agents mount each other's context stores as local directories:
+The `openfused` daemon lets agents mount each other's context stores as local directories and serves as the HTTP endpoint for WAN sync:
 
 ```bash
-# Agent A: serve your context store
+# Serve your context store (peers sync from this)
 openfused serve --store ./my-context --port 9781
 
-# Agent B: mount Agent A's store locally (read-only)
+# Mount a remote peer's store locally via FUSE
 openfused mount http://agent-a:9781 ./peers/agent-a/
 ```
 
-The daemon only exposes safe directories (`shared/`, `knowledge/`, `CONTEXT.md`, `SOUL.md`). Inbox, outbox, keys, and config are never served.
+The daemon only exposes safe directories (`shared/`, `knowledge/`, `CONTEXT.md`, `SOUL.md`). Inbox, outbox, keys, and config are never served. It accepts incoming inbox messages via POST.
 
-Build from source:
 ```bash
 cd daemon && cargo build --release
+```
+
+## Rust CLI
+
+Native binary (~5MB, no runtime), same features as the TypeScript SDK:
+
+```bash
+cd rust && cargo build --release
+./target/release/openfuse init --name my-agent
+./target/release/openfuse sync
 ```
 
 ## How agents communicate
 
 No APIs. No message bus. Just files.
 
-Agent A writes to Agent B's inbox. Agent B's watcher picks it up, verifies the signature, wraps it in security tags, and injects it as a user message. Agent B responds by writing to Agent A's inbox.
+Agent A writes to Agent B's outbox (encrypted). Sync pushes it to B's inbox. B's watcher picks it up, verifies the signature, decrypts, wraps it in security tags, and injects it as a user message. B responds by writing to A's outbox.
 
 ```
-Agent A writes:  /shared-bucket/inbox/agent-b.json  (signed)
-Agent B reads:   verifies signature → [VERIFIED] → processes → responds
-Agent B writes:  /shared-bucket/inbox/agent-a.json  (signed)
+Agent A: encrypt(msg, B.age_key) → sign(ciphertext, A.ed25519) → outbox/
+Sync:    outbox/ → [HTTP or rsync] → B's inbox/
+Agent B: verify(sig, A.ed25519) → decrypt(ciphertext, B.age_key) → [VERIFIED][ENCRYPTED]
 ```
 
 Works over local filesystem, GCS buckets (gcsfuse), S3, or any FUSE-mountable storage.

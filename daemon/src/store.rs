@@ -9,6 +9,8 @@ pub struct MeshConfig {
     pub created: String,
     #[serde(default)]
     pub public_key: Option<String>,
+    #[serde(default, rename = "encryptionKey")]
+    pub encryption_key: Option<String>,
     #[serde(default)]
     pub peers: Vec<PeerConfig>,
     #[serde(default)]
@@ -45,7 +47,6 @@ impl ContextStore {
         serde_json::from_str(&data).ok()
     }
 
-    /// List files in a subdirectory (e.g. "shared", "inbox", "knowledge")
     pub async fn list_dir(&self, subdir: &str) -> Vec<FileEntry> {
         let dir = self.root.join(subdir);
         let mut entries = Vec::new();
@@ -65,16 +66,13 @@ impl ContextStore {
         entries
     }
 
-    /// Read a file from the store (restricted to safe subdirectories)
     pub async fn read_file(&self, path: &str) -> Option<Vec<u8>> {
-        // Security: only allow reading from shared/, knowledge/, and specific root files
         let allowed_prefixes = ["shared/", "knowledge/", "CONTEXT.md", "SOUL.md"];
         if !allowed_prefixes.iter().any(|p| path.starts_with(p)) {
             tracing::warn!("Blocked read of restricted path: {}", path);
             return None;
         }
 
-        // Prevent path traversal
         if path.contains("..") {
             tracing::warn!("Blocked path traversal attempt: {}", path);
             return None;
@@ -84,11 +82,9 @@ impl ContextStore {
         fs::read(&full_path).await.ok()
     }
 
-    /// List root-level readable entries
     pub async fn list_root(&self) -> Vec<FileEntry> {
         let mut entries = Vec::new();
 
-        // Expose only safe directories and files
         for name in &["CONTEXT.md", "SOUL.md", "shared", "knowledge"] {
             let path = self.root.join(name);
             if let Ok(meta) = fs::metadata(&path).await {
@@ -101,5 +97,17 @@ impl ContextStore {
         }
 
         entries
+    }
+
+    /// Write a message to the inbox directory
+    pub async fn write_inbox(&self, filename: &str, content: &str) -> Result<(), std::io::Error> {
+        let inbox_dir = self.root.join("inbox");
+        fs::create_dir_all(&inbox_dir).await?;
+
+        // Sanitize filename
+        let safe_name = filename
+            .replace(['/', '\\'], "_")
+            .replace("..", "_");
+        fs::write(inbox_dir.join(safe_name), content).await
     }
 }

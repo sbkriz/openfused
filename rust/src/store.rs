@@ -1,21 +1,32 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
-use anyhow::Result;
 
-use crate::crypto;
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+
+use crate::crypto::{self, KeyringEntry, SignedMessage};
 
 const STORE_DIRS: &[&str] = &["history", "knowledge", "inbox", "outbox", "shared"];
+
+// --- Config types ---
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MeshConfig {
     pub id: String,
     pub name: String,
     pub created: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Ed25519 signing public key (hex)
+    #[serde(rename = "publicKey", skip_serializing_if = "Option::is_none")]
     pub public_key: Option<String>,
+    /// age encryption public key (age1...)
+    #[serde(rename = "encryptionKey", skip_serializing_if = "Option::is_none")]
+    pub encryption_key: Option<String>,
     pub peers: Vec<PeerConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// New keyring format — replaces trusted_keys
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keyring: Vec<KeyringEntry>,
+    /// Legacy field — migrated to keyring on read
+    #[serde(rename = "trustedKeys", skip_serializing_if = "Option::is_none")]
     pub trusted_keys: Option<Vec<String>>,
 }
 
@@ -25,7 +36,7 @@ pub struct PeerConfig {
     pub name: String,
     pub url: String,
     pub access: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "mountPath", skip_serializing_if = "Option::is_none")]
     pub mount_path: Option<String>,
 }
 
@@ -44,7 +55,10 @@ pub struct InboxMessage {
     pub from: String,
     pub time: String,
     pub verified: bool,
+    pub encrypted: bool,
 }
+
+// --- Context store ---
 
 pub struct ContextStore {
     root: PathBuf,
@@ -52,7 +66,9 @@ pub struct ContextStore {
 
 impl ContextStore {
     pub fn new(root: &Path) -> Self {
-        Self { root: root.to_path_buf() }
+        Self {
+            root: root.to_path_buf(),
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -67,42 +83,81 @@ impl ContextStore {
         self.config_path().exists()
     }
 
+    // --- Init ---
+
     pub fn init(&self, name: &str, id: &str) -> Result<()> {
         fs::create_dir_all(&self.root)?;
         for dir in STORE_DIRS {
             fs::create_dir_all(self.root.join(dir))?;
         }
+        fs::create_dir_all(self.root.join(".peers"))?;
 
-        // Write template files if they don't exist
         let context_path = self.root.join("CONTEXT.md");
         if !context_path.exists() {
-            fs::write(&context_path, "# Context\n\n*Working memory — what's happening right now.*\n")?;
+            fs::write(
+                &context_path,
+                "# Context\n\n*Working memory — what's happening right now.*\n",
+            )?;
         }
 
         let soul_path = self.root.join("SOUL.md");
         if !soul_path.exists() {
-            fs::write(&soul_path, format!("# Soul\n\n*Agent identity and rules.*\n\n**Name:** {}\n**ID:** {}\n", name, id))?;
+            fs::write(
+                &soul_path,
+                format!(
+                    "# Soul\n\n*Agent identity and rules.*\n\n**Name:** {}\n**ID:** {}\n",
+                    name, id
+                ),
+            )?;
         }
 
-        // Generate signing keys
-        let public_key = crypto::generate_keys(&self.root)?;
+        let (public_key, encryption_key) = crypto::generate_keys(&self.root)?;
 
-        // Write config
         let config = MeshConfig {
             id: id.to_string(),
             name: name.to_string(),
             created: chrono::Utc::now().to_rfc3339(),
             public_key: Some(public_key),
+            encryption_key: Some(encryption_key),
             peers: vec![],
-            trusted_keys: Some(vec![]),
+            keyring: vec![],
+            trusted_keys: None,
         };
         self.write_config(&config)?;
         Ok(())
     }
 
+    // --- Config I/O ---
+
     pub fn read_config(&self) -> Result<MeshConfig> {
         let raw = fs::read_to_string(self.config_path())?;
-        Ok(serde_json::from_str(&raw)?)
+        let mut config: MeshConfig = serde_json::from_str(&raw)?;
+
+        // Migrate legacy trusted_keys → keyring
+        if let Some(keys) = config.trusted_keys.take() {
+            for key in keys {
+                let key = key.trim().to_string();
+                if key.is_empty() {
+                    continue;
+                }
+                let already = config.keyring.iter().any(|e| e.signing_key == key);
+                if !already {
+                    config.keyring.push(KeyringEntry {
+                        name: format!("migrated-{}", &key[..8.min(key.len())]),
+                        address: String::new(),
+                        signing_key: key.clone(),
+                        encryption_key: None,
+                        fingerprint: crypto::fingerprint(&key),
+                        trusted: true,
+                        added: chrono::Utc::now().to_rfc3339(),
+                    });
+                }
+            }
+            // Save migrated config
+            self.write_config(&config)?;
+        }
+
+        Ok(config)
     }
 
     pub fn write_config(&self, config: &MeshConfig) -> Result<()> {
@@ -110,6 +165,8 @@ impl ContextStore {
         fs::write(self.config_path(), format!("{}\n", json))?;
         Ok(())
     }
+
+    // --- Context / Soul ---
 
     pub fn read_context(&self) -> Result<String> {
         Ok(fs::read_to_string(self.root.join("CONTEXT.md"))?)
@@ -129,12 +186,32 @@ impl ContextStore {
         Ok(())
     }
 
+    // --- Inbox ---
+
+    /// Send a message to a peer. Encrypts if we have their age key in the keyring.
     pub fn send_inbox(&self, peer_id: &str, message: &str, from: &str) -> Result<()> {
-        let signed = crypto::sign_message(&self.root, from, message)?;
+        let config = self.read_config()?;
+
+        // Look up peer's encryption key in keyring
+        let entry = config.keyring.iter().find(|e| {
+            e.name == peer_id || e.address.starts_with(&format!("{}@", peer_id))
+        });
+
+        let signed = if let Some(entry) = entry {
+            if let Some(ref age_key) = entry.encryption_key {
+                crypto::sign_and_encrypt(&self.root, from, message, age_key)?
+            } else {
+                crypto::sign_message(&self.root, from, message)?
+            }
+        } else {
+            crypto::sign_message(&self.root, from, message)?
+        };
+
         let serialized = serde_json::to_string_pretty(&signed)?;
-        let timestamp = chrono::Utc::now().to_rfc3339().replace([':', '.'], "-");
+        let timestamp = chrono::Utc::now()
+            .to_rfc3339()
+            .replace([':', '.'], "-");
         let filename = format!("{}_{}.json", timestamp, peer_id);
-        fs::write(self.root.join("inbox").join(&filename), &serialized)?;
         fs::write(self.root.join("outbox").join(&filename), &serialized)?;
         Ok(())
     }
@@ -146,18 +223,16 @@ impl ContextStore {
         }
 
         let config = self.read_config()?;
-        let trusted_keys: Vec<String> = config.trusted_keys
-            .unwrap_or_default()
-            .iter()
-            .map(|k| k.trim().to_string())
-            .collect();
-
         let mut messages = vec![];
 
         for entry in fs::read_dir(&inbox_dir)? {
             let entry = entry?;
             let path = entry.path();
-            let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            let fname = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
 
             if !fname.ends_with(".json") && !fname.ends_with(".md") {
                 continue;
@@ -165,27 +240,48 @@ impl ContextStore {
 
             let raw = fs::read_to_string(&path)?;
 
-            if let Ok(signed) = serde_json::from_str::<crypto::SignedMessage>(&raw) {
-                if signed.from.is_empty() || signed.message.is_empty() {
+            if let Ok(signed) = serde_json::from_str::<SignedMessage>(&raw) {
+                if signed.from.is_empty() {
                     continue;
                 }
+
                 let sig_valid = crypto::verify_message(&signed);
-                let trusted = trusted_keys.iter().any(|k| k == signed.public_key.trim());
+                let trusted = config
+                    .keyring
+                    .iter()
+                    .any(|e| e.trusted && e.signing_key.trim() == signed.public_key.trim());
+
                 let verified = sig_valid && trusted;
+
+                // Decrypt if encrypted
+                let content = if signed.encrypted {
+                    match crypto::decrypt_message(&self.root, &signed) {
+                        Ok(plain) => plain,
+                        Err(_) => "[encrypted — cannot decrypt]".to_string(),
+                    }
+                } else {
+                    signed.message.clone()
+                };
+
                 let wrapped = crypto::wrap_external_message(&signed, verified);
                 messages.push(InboxMessage {
                     file: fname,
-                    content: signed.message.clone(),
+                    content,
                     wrapped_content: wrapped,
                     from: signed.from.clone(),
                     time: signed.timestamp.clone(),
                     verified,
+                    encrypted: signed.encrypted,
                 });
             } else {
                 // Unsigned fallback
                 let stem = fname.trim_end_matches(".json").trim_end_matches(".md");
                 let parts: Vec<&str> = stem.splitn(2, '_').collect();
-                let from = if parts.len() > 1 { parts[1].to_string() } else { "unknown".to_string() };
+                let from = if parts.len() > 1 {
+                    parts[1].to_string()
+                } else {
+                    "unknown".to_string()
+                };
                 let time = parts[0].to_string();
                 let wrapped = format!(
                     "<external_message from=\"{}\" verified=\"false\" time=\"{}\" status=\"UNVERIFIED\">\n{}\n</external_message>",
@@ -198,6 +294,7 @@ impl ContextStore {
                     from,
                     time,
                     verified: false,
+                    encrypted: false,
                 });
             }
         }
@@ -205,6 +302,8 @@ impl ContextStore {
         messages.sort_by(|a, b| a.time.cmp(&b.time));
         Ok(messages)
     }
+
+    // --- Shared files ---
 
     pub fn list_shared(&self) -> Result<Vec<String>> {
         let shared_dir = self.root.join("shared");
@@ -224,6 +323,8 @@ impl ContextStore {
         fs::write(shared_dir.join(filename), content)?;
         Ok(())
     }
+
+    // --- Status ---
 
     pub fn status(&self) -> Result<StatusInfo> {
         let config = self.read_config()?;

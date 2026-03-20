@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::Json,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use std::path::PathBuf;
@@ -20,6 +20,7 @@ pub async fn serve(store_path: PathBuf, bind: &str, port: u16) {
         .route("/ls/{*path}", get(list_dir))
         .route("/read/{*path}", get(read_file))
         .route("/config", get(get_config))
+        .route("/inbox", post(receive_inbox))
         .layer(CorsLayer::permissive())
         .with_state(store);
 
@@ -31,16 +32,18 @@ pub async fn serve(store_path: PathBuf, bind: &str, port: u16) {
 }
 
 async fn root() -> &'static str {
-    "openfused v0.2.0 — context mesh daemon"
+    "openfused v0.3.0 — context mesh daemon"
 }
 
-async fn get_config(State(store): State<Arc<ContextStore>>) -> Result<Json<serde_json::Value>, StatusCode> {
+async fn get_config(
+    State(store): State<Arc<ContextStore>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
     let config = store.config().await.ok_or(StatusCode::NOT_FOUND)?;
-    // Only expose public info — not private keys or trusted keys
     Ok(Json(serde_json::json!({
         "id": config.id,
         "name": config.name,
         "publicKey": config.public_key,
+        "encryptionKey": config.encryption_key,
     })))
 }
 
@@ -52,7 +55,6 @@ async fn list_dir(
     State(store): State<Arc<ContextStore>>,
     Path(path): Path<String>,
 ) -> Result<Json<Vec<FileEntry>>, StatusCode> {
-    // Only allow listing safe directories
     if !["shared", "knowledge"].contains(&path.as_str()) {
         return Err(StatusCode::FORBIDDEN);
     }
@@ -64,4 +66,33 @@ async fn read_file(
     Path(path): Path<String>,
 ) -> Result<Vec<u8>, StatusCode> {
     store.read_file(&path).await.ok_or(StatusCode::NOT_FOUND)
+}
+
+/// Receive a signed message into the inbox (used by openfuse sync over HTTP)
+async fn receive_inbox(
+    State(store): State<Arc<ContextStore>>,
+    body: String,
+) -> Result<StatusCode, StatusCode> {
+    // Validate it's parseable JSON with required fields
+    let msg: serde_json::Value =
+        serde_json::from_str(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    if msg.get("from").is_none() || msg.get("signature").is_none() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    // Write to inbox with timestamp filename
+    let from = msg["from"].as_str().unwrap_or("unknown");
+    let timestamp = chrono::Utc::now()
+        .to_rfc3339()
+        .replace([':', '.'], "-");
+    let filename = format!("{}_{}.json", timestamp, from);
+
+    store
+        .write_inbox(&filename, &body)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    tracing::info!("Received inbox message from: {}", from);
+    Ok(StatusCode::CREATED)
 }

@@ -27,27 +27,26 @@ That changes everything about how this should be designed.
 - Rust CLI (native binary, ~5MB, no runtime)
 - Same commands, same file format, same mesh protocol
 
-### v0.3 — Context Integrity *(next)*
-- [ ] **Key interop** — normalize ed25519 key format between Rust and TS (currently incompatible: PEM vs raw hex)
+### v0.3 — Encryption + Sync + Keyring ✅ *(Mar 2026)*
+- [x] **Key interop** — normalized ed25519 key format (raw hex) between Rust and TS
+- [x] **age encryption** — encrypt inbox messages with recipient's age public key (X25519 + ChaCha20-Poly1305)
+- [x] **Encrypt-then-sign** — messages are encrypted for recipient AND signed by sender
+- [x] **Selective encryption** — shared/ directory remains plaintext (public), inbox/ encrypted (private)
+- [x] **Keyring** — GPG-style key management: import, trust, list, export. agent-name@hostname addressing
+- [x] **`openfuse sync`** — pull context, push outbox over HTTP or SSH
+- [x] **SSH transport** — rsync over SSH, uses ~/.ssh/config host aliases (LAN)
+- [x] **HTTP transport** — fetch from daemon API, POST /inbox (WAN)
+- [x] **Two modes, same protocol:**
+  - **Mesh mode** — persistent shared filesystem, real-time (agents on same machine/cluster)
+  - **Fetch mode** — snapshot sync over HTTP/SSH (agents across the internet, minimal attack surface)
+- [x] Agent code doesn't know or care which mode it's using — context just materializes
+
+### v0.4 — Context Integrity *(next)*
 - [ ] **Advisory file locking** — `.lock` files with PID + TTL for CONTEXT.md writes, stale lock detection (agent crash → lock expires after 30s)
 - [ ] **Context compaction** — `openfuse compact` rolls old inbox messages into `history/YYYY-MM-DD.md` digests (log rotation for agents), keeps inode count manageable
 - [ ] **Schema versioning** — version field in `.mesh.json`, migration path for protocol changes
 
-### v0.4 — Encryption
-- [ ] **age encryption** — encrypt inbox messages with recipient's public key (lighter than PGP, no web of trust overhead)
-- [ ] **Encrypt-then-sign** — messages are encrypted for recipient AND signed by sender
-- [ ] **Selective encryption** — shared/ directory remains plaintext (public), inbox/ encrypted (private)
-- [ ] **Key exchange** — `openfuse peer trust` extended to exchange encryption keys alongside signing keys
-
-### v0.5 — Fetch Mode (Context Materialization)
-- [ ] **`openfuse sync`** — pull inbox, push outbox over HTTP or SSH. No persistent mount needed
-- [ ] **Atomic sync** — mount, rsync, unmount in milliseconds. Agent only has access during sync window
-- [ ] **Two modes, same protocol:**
-  - **Mesh mode** — persistent shared filesystem, real-time (agents on same machine/cluster)
-  - **Fetch mode** — snapshot sync over HTTP/SSH (agents across the internet, minimal attack surface)
-- [ ] Agent code doesn't know or care which mode it's using — context just materializes
-
-### v0.6 — OpenShell Integration
+### v0.5 — OpenShell Integration
 - [ ] **Sandboxed agent collaboration** — OpenFused context stores as shared volumes across OpenShell sandboxes
 - [ ] **Policy-aware sync** — respect OpenShell filesystem policies during fetch
 - [ ] **Zero-mount fetch** — agents in locked-down sandboxes use fetch mode (no persistent mount = no shell access to remote files)
