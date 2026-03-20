@@ -1,12 +1,15 @@
 import { readFile, writeFile, mkdir, readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { existsSync } from "node:fs";
+import { generateKeys, hasKeys, signMessage, verifyMessage, deserializeSignedMessage, serializeSignedMessage, wrapExternalMessage, type SignedMessage } from "./crypto.js";
 
 export interface MeshConfig {
   id: string;
   name: string;
   created: string;
+  publicKey?: string;
   peers: PeerConfig[];
+  trustedKeys?: string[];
 }
 
 export interface PeerConfig {
@@ -52,12 +55,17 @@ export class ContextStore {
       }
     }
 
+    // Generate signing keypair
+    const keys = await generateKeys(this.root);
+
     // Write mesh config
     const config: MeshConfig = {
       id,
       name,
       created: new Date().toISOString(),
+      publicKey: keys.publicKey,
       peers: [],
+      trustedKeys: [],
     };
     await this.writeConfig(config);
   }
@@ -87,29 +95,64 @@ export class ContextStore {
     await writeFile(join(this.root, "SOUL.md"), content);
   }
 
-  // --- Inbox ---
+  // --- Inbox (signed messages) ---
 
   async sendInbox(peerId: string, message: string): Promise<void> {
+    const config = await this.readConfig();
+    const signed = await signMessage(this.root, config.id, message);
     const inboxDir = join(this.root, "inbox");
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `${timestamp}_${peerId}.md`;
-    await writeFile(join(inboxDir, filename), message);
+    const filename = `${timestamp}_${peerId}.json`;
+    await writeFile(join(inboxDir, filename), serializeSignedMessage(signed));
   }
 
-  async readInbox(): Promise<Array<{ file: string; content: string; from: string; time: string }>> {
+  async readInbox(): Promise<Array<{
+    file: string;
+    content: string;
+    wrappedContent: string;
+    from: string;
+    time: string;
+    verified: boolean;
+  }>> {
     const inboxDir = join(this.root, "inbox");
     if (!existsSync(inboxDir)) return [];
 
+    const config = await this.readConfig();
     const files = await readdir(inboxDir);
     const messages = [];
 
-    for (const file of files.filter((f) => f.endsWith(".md"))) {
-      const content = await readFile(join(inboxDir, file), "utf-8");
-      // Parse filename: 2026-03-20T01-30-00-000Z_peer-id.md
-      const parts = file.replace(".md", "").split("_");
-      const from = parts.slice(1).join("_");
-      const time = parts[0].replace(/-/g, (m, i) => (i < 10 ? "-" : i < 13 ? "T" : i < 19 ? ":" : ".")).replace("Z", "");
-      messages.push({ file, content, from, time });
+    for (const file of files.filter((f) => f.endsWith(".json") || f.endsWith(".md"))) {
+      const raw = await readFile(join(inboxDir, file), "utf-8");
+
+      // Try parsing as signed message
+      const signed = deserializeSignedMessage(raw);
+      if (signed) {
+        const verified = verifyMessage(signed);
+        const trusted = config.trustedKeys?.some(k => k.trim() === signed.publicKey.trim()) ?? false;
+        messages.push({
+          file,
+          content: signed.message,
+          wrappedContent: wrapExternalMessage(signed, verified && trusted),
+          from: signed.from,
+          time: signed.timestamp,
+          verified: verified && trusted,
+        });
+      } else {
+        // Unsigned message — mark as unverified
+        const parts = file.replace(/\.(md|json)$/, "").split("_");
+        const from = parts.slice(1).join("_");
+        messages.push({
+          file,
+          content: raw,
+          wrappedContent: wrapExternalMessage(
+            { from, timestamp: parts[0], message: raw, signature: "", publicKey: "" },
+            false
+          ),
+          from,
+          time: parts[0],
+          verified: false,
+        });
+      }
     }
 
     return messages.sort((a, b) => a.time.localeCompare(b.time));

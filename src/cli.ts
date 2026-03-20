@@ -28,8 +28,10 @@ program
     const id = nanoid(12);
     await store.init(opts.name, id);
     console.log(`Initialized context store: ${store.root}`);
+    const config = await store.readConfig();
     console.log(`  Agent ID: ${id}`);
     console.log(`  Name: ${opts.name}`);
+    console.log(`  Signing keys: generated (.keys/)`);
     console.log(`\nStructure:`);
     console.log(`  CONTEXT.md  — working memory (edit this)`);
     console.log(`  SOUL.md     — agent identity & rules`);
@@ -104,6 +106,7 @@ inbox
   .command("list")
   .description("List inbox messages")
   .option("-d, --dir <path>", "Context store directory", ".")
+  .option("--raw", "Show raw content instead of wrapped")
   .action(async (opts) => {
     const store = new ContextStore(resolve(opts.dir));
     const messages = await store.readInbox();
@@ -112,8 +115,9 @@ inbox
       return;
     }
     for (const msg of messages) {
-      console.log(`\n--- From: ${msg.from} | ${msg.time} ---`);
-      console.log(msg.content);
+      const badge = msg.verified ? "[VERIFIED]" : "[UNVERIFIED]";
+      console.log(`\n--- ${badge} From: ${msg.from} | ${msg.time} ---`);
+      console.log(opts.raw ? msg.content : msg.wrappedContent);
     }
   });
 
@@ -218,6 +222,40 @@ peer
     config.peers = config.peers.filter((p) => p.id !== id && p.name !== id);
     await store.writeConfig(config);
     console.log(`Removed peer: ${id}`);
+  });
+
+peer
+  .command("trust <publicKeyFile>")
+  .description("Trust a peer's public key (messages from them will show as verified)")
+  .option("-d, --dir <path>", "Context store directory", ".")
+  .action(async (publicKeyFile, opts) => {
+    const store = new ContextStore(resolve(opts.dir));
+    const config = await store.readConfig();
+    const { readFile } = await import("node:fs/promises");
+    const pubKey = (await readFile(resolve(publicKeyFile), "utf-8")).trim();
+    if (!config.trustedKeys) config.trustedKeys = [];
+    if (config.trustedKeys.includes(pubKey)) {
+      console.log("Key already trusted.");
+      return;
+    }
+    config.trustedKeys.push(pubKey);
+    await store.writeConfig(config);
+    console.log("Key trusted. Messages signed with this key will show as [VERIFIED].");
+  });
+
+// --- key ---
+program
+  .command("key")
+  .description("Show this agent's public key (share with peers so they can trust you)")
+  .option("-d, --dir <path>", "Context store directory", ".")
+  .action(async (opts) => {
+    const store = new ContextStore(resolve(opts.dir));
+    const config = await store.readConfig();
+    if (config.publicKey) {
+      console.log(config.publicKey);
+    } else {
+      console.error("No keys found. Run `openfuse init` first.");
+    }
   });
 
 program.parse();
