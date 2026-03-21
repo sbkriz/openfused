@@ -142,8 +142,9 @@ program
   .description("Watch for inbox messages, context changes, and sync with peers")
   .option("-d, --dir <path>", "Context store directory", ".")
   .option("--sync-interval <seconds>", "Peer sync interval in seconds (0 to disable)", "60")
-  .option("--tunnel <host>", "Open reverse SSH tunnel to host (makes your store reachable from behind NAT)")
-  .option("--tunnel-port <port>", "Remote port for reverse tunnel", "2222")
+  .option("--tunnel <host>", "Reverse SSH tunnel to host for NAT traversal (uses autossh if available)")
+  .option("--tunnel-port <port>", "Remote port for reverse SSH tunnel", "2222")
+  .option("--cloudflared", "Start a cloudflared quick tunnel (no config needed, gives you a public URL)")
   .action(async (opts) => {
     const store = new ContextStore(resolve(opts.dir));
     if (!(await store.exists())) {
@@ -188,6 +189,25 @@ program
 
       console.log(`Tunnel: ${cmd} -R ${tunnelPort}:localhost:9781 ${tunnelHost}`);
       console.log(`Your store is reachable at ssh://${tunnelHost}:${tunnelPort} (via daemon on :9781)`);
+    }
+
+    // Cloudflared quick tunnel (optional) — gives you a public *.trycloudflare.com URL
+    if (opts.cloudflared) {
+      const { spawn } = await import("node:child_process");
+      const cf = spawn("cloudflared", ["tunnel", "--url", "http://localhost:9781"], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      cf.on("error", (e) => console.error(`[cloudflared] failed: ${e.message}. Install: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/`));
+      cf.stderr.on("data", (data: Buffer) => {
+        const line = data.toString();
+        const match = line.match(/https:\/\/[^\s]+\.trycloudflare\.com/);
+        if (match) {
+          console.log(`[cloudflared] Your public URL: ${match[0]}`);
+          console.log(`  Register it: openfuse register --endpoint ${match[0]}`);
+        }
+      });
+      process.on("exit", () => cf.kill());
+      console.log("Starting cloudflared tunnel...");
     }
 
     console.log(`Press Ctrl+C to stop.\n`);
