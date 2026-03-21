@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use crate::crypto;
 use crate::store::ContextStore;
 
-/// Default public registry URL
+/// Default public registry URL. The registry serves as both DNS (name→endpoint
+/// resolution) and keyserver (name→public key distribution), similar to how
+/// keys.openpgp.org combines both roles for email.
 pub const DEFAULT_REGISTRY: &str = "https://openfuse-registry.wzmcghee.workers.dev";
 
 /// Agent manifest — the "DNS record" for an agent in the registry.
@@ -150,7 +152,10 @@ async fn register_http(manifest: &Manifest, registry: &str) -> Result<()> {
     }
 }
 
-/// Discover an agent by name. Handles both local dir and HTTP registries.
+/// Discover an agent by name. Returns the manifest but does NOT auto-trust it.
+/// Keys imported from discovery are added to the local keyring as untrusted —
+/// the user must explicitly `openfuse key trust <fingerprint>` after verifying
+/// the fingerprint out-of-band. This follows the GPG/SSH "trust on first use" model.
 pub async fn discover(name: &str, registry: &str) -> Result<Manifest> {
     if is_http(registry) {
         discover_http(name, registry).await
@@ -273,7 +278,9 @@ pub fn verify_manifest(manifest: &Manifest) -> bool {
     crypto::verify_message(&signed)
 }
 
-/// Revoke this agent's key in the registry.
+/// Revoke this agent's key. The revocation message must be signed by the key
+/// being revoked — only the key owner can revoke it, and the registry can
+/// verify this without any pre-shared secret or admin access.
 pub async fn revoke(store: &ContextStore, registry: &str) -> Result<()> {
     let config = store.read_config()?;
     let name = &config.name;
@@ -324,7 +331,9 @@ pub async fn revoke(store: &ContextStore, registry: &str) -> Result<()> {
     Ok(())
 }
 
-/// Rotate this agent's key: generate new keypair, sign rotation with old key.
+/// Key rotation: old key signs a message authorizing the new key. This creates a
+/// verifiable chain of custody — anyone can confirm the rotation was authorized
+/// by the previous key owner, not a registry compromise or name squatter.
 pub async fn rotate(store: &ContextStore, registry: &str) -> Result<(String, String)> {
     let config = store.read_config()?;
     let name = &config.name;
@@ -422,7 +431,9 @@ pub async fn check_update(current: &str) -> Option<String> {
     }
 }
 
-/// Canonical string representation of a manifest for signing.
+/// Canonical string for signing — pipe-delimited to avoid JSON serialization
+/// ambiguity (field ordering, whitespace). Both client and server must produce
+/// the same canonical form, so we use the simplest possible format.
 fn canonical_manifest(m: &Manifest) -> String {
     format!(
         "{}|{}|{}|{}",

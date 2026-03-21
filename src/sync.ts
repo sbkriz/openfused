@@ -1,3 +1,9 @@
+// --- Transport design ---
+// Two transports, one protocol. HTTP for WAN (daemon serves context over the internet),
+// SSH/rsync for LAN (zero config if you already have SSH keys — uses ~/.ssh/config aliases
+// so agents reference hostnames, never raw IPs that change). Both transports do the same
+// thing: pull CONTEXT.md + PROFILE.md + shared/ + knowledge/, push outbox → peer inbox.
+
 import { readFile, writeFile, mkdir, readdir, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
@@ -21,7 +27,8 @@ interface Transport {
   path?: string;
 }
 
-/** Move delivered message from outbox/ to outbox/.sent/ to prevent re-delivery. */
+// Archive instead of delete: preserves audit trail and lets agents review what was sent.
+// Without this, sync would re-deliver the same message every cycle.
 async function archiveSent(outboxDir: string, fname: string): Promise<void> {
   const sentDir = join(outboxDir, ".sent");
   await mkdir(sentDir, { recursive: true });
@@ -37,7 +44,8 @@ function parseUrl(url: string): Transport {
     if (colonIdx === -1) throw new Error("SSH URL must be ssh://host:/path");
     const host = rest.slice(0, colonIdx);
     const path = rest.slice(colonIdx + 1);
-    // Validate: prevent argument injection via rsync
+    // Prevent argument injection: rsync treats leading "-" as flags, and shell
+    // metacharacters could escape the execFile boundary on some platforms.
     if (host.startsWith("-") || path.startsWith("-")) {
       throw new Error("Invalid SSH URL: host/path cannot start with '-'");
     }
@@ -117,7 +125,8 @@ async function syncHttp(
       await mkdir(localDir, { recursive: true });
       for (const f of files) {
         if (f.is_dir) continue;
-        // Sanitize remote filename — extract basename, reject traversal
+        // Remote peer controls this filename — must sanitize before writing to local disk.
+        // Basename extraction blocks "../../../etc/passwd" style traversal from a malicious peer.
         const safeName = f.name.split("/").pop()!.split("\\").pop()!;
         if (!safeName || safeName.includes("..")) continue;
         const r = await fetch(`${baseUrl}/read/${dir}/${safeName}`);

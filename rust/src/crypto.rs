@@ -1,3 +1,8 @@
+// Design: two separate keypairs — Ed25519 for signing (identity/auth) and age for
+// encryption (confidentiality). Separated because signing keys need to be public
+// while encryption keys rotate independently. age chosen over GPG/NaCl because it
+// has no config, no key format wars, and works as a library without shelling out.
+
 use std::fs;
 use std::io::{Read, Write as IoWrite};
 use std::path::Path;
@@ -83,11 +88,13 @@ pub fn generate_keys(store_root: &Path) -> Result<(String, String)> {
 
 // --- Fingerprint ---
 
+/// SHA-256 fingerprint of a public key, truncated to 16 bytes and colon-grouped.
+/// Mimics GPG short fingerprints so humans can verify key identity over side channels
+/// (voice, chat) without comparing 64-char hex strings.
 pub fn fingerprint(public_key: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(public_key.as_bytes());
     let hash = hasher.finalize();
-    // First 16 bytes as colon-separated hex pairs (like GPG short fingerprint)
     hash.iter()
         .take(16)
         .map(|b| format!("{:02X}", b))
@@ -142,8 +149,10 @@ pub fn sign_message(store_root: &Path, from: &str, message: &str) -> Result<Sign
     })
 }
 
-/// Sign a message and encrypt it for a specific recipient's age key.
-/// Encrypt-then-sign: encrypt the plaintext, then sign the ciphertext.
+/// Encrypt-then-sign: encrypt plaintext with recipient's age key, then sign the
+/// ciphertext. This ordering matters — signing cleartext then encrypting leaks the
+/// ability to strip encryption and replay the signed plaintext. By signing the
+/// ciphertext, the signature is only valid for this specific encrypted envelope.
 pub fn sign_and_encrypt(
     store_root: &Path,
     from: &str,
@@ -234,6 +243,9 @@ fn age_decrypt(ciphertext: &[u8], store_root: &Path) -> Result<Vec<u8>> {
     Ok(plaintext)
 }
 
+/// Wrap a signed message in XML tags for safe injection into LLM context.
+/// XML escaping prevents prompt injection — a malicious `from` field containing
+/// `</external_message>` can't break out of the wrapper and forge trust signals.
 pub fn wrap_external_message(signed: &SignedMessage, verified: bool) -> String {
     let status = if verified { "verified" } else { "UNVERIFIED" };
     let esc = |s: &str| s.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;");

@@ -1,3 +1,8 @@
+// --- Watch strategy ---
+// chokidar for local filesystem events (inbox, CONTEXT.md) — instant, inotify-backed on Linux.
+// Polling interval for remote sync (watchSync) — because remote peers are over HTTP/SSH,
+// there's no filesystem event to listen for. Polling is the only option without WebSockets.
+
 import { watch } from "chokidar";
 import { readFile } from "node:fs/promises";
 import { join, basename } from "node:path";
@@ -31,6 +36,8 @@ export function watchInbox(storeRoot: string, callback: InboxCallback): () => vo
     } catch {}
   };
 
+  // awaitWriteFinish: messages are written by sync (multi-step: create + write + close).
+  // Without stability threshold, we'd fire on half-written files.
   const watcher = watch(inboxDir, {
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 500 },
@@ -73,7 +80,10 @@ export function watchSync(
   let running = false;
 
   const doSync = async () => {
-    if (running) return; // skip if previous sync still in progress
+    // Guard against overlapping syncs: if a peer is slow or unreachable, the previous
+    // cycle may still be running when the next interval fires. Overlapping syncs could
+    // double-deliver outbox messages or corrupt in-flight file writes.
+    if (running) return;
     running = true;
     try {
       const results = await syncAll(store);

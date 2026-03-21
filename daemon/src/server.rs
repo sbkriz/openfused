@@ -11,6 +11,10 @@ use tower_http::cors::CorsLayer;
 
 use crate::store::{ContextStore, FileEntry};
 
+// Two serving modes: "public" exposes only PROFILE.md + inbox (safe for the open
+// internet), while "full" also serves CONTEXT.md, shared/, and knowledge/ (for
+// trusted LAN peers). This prevents accidental exposure of working memory to
+// untrusted peers while still allowing message delivery.
 pub async fn serve(store_path: PathBuf, bind: &str, port: u16, public: bool) {
     let store = Arc::new(ContextStore::new(store_path));
 
@@ -20,7 +24,6 @@ pub async fn serve(store_path: PathBuf, bind: &str, port: u16, public: bool) {
         .route("/profile", get(get_profile))
         .route("/inbox", post(receive_inbox));
 
-    // Full context serving — only for trusted peers (LAN/SSH)
     if public {
         tracing::info!("Public mode: serving PROFILE.md + inbox only");
     } else {
@@ -32,7 +35,9 @@ pub async fn serve(store_path: PathBuf, bind: &str, port: u16, public: bool) {
     }
 
     let app = app
-        .layer(DefaultBodyLimit::max(1024 * 1024)) // 1MB max request body
+        // 1MB body limit — inbox messages are JSON envelopes, not file transfers.
+        // Prevents a malicious peer from filling the disk via POST /inbox.
+        .layer(DefaultBodyLimit::max(1024 * 1024))
         .layer(CorsLayer::permissive())
         .with_state(store);
 
@@ -59,7 +64,9 @@ async fn get_config(
     })))
 }
 
-/// Serve PROFILE.md — the agent's public business card
+/// PROFILE.md is served separately from /read because it's available in both
+/// public and full modes. It's the agent's business card — always safe to share.
+/// SOUL.md is deliberately NOT served (private identity, never leaves the host).
 async fn get_profile(
     State(store): State<Arc<ContextStore>>,
 ) -> Result<Vec<u8>, StatusCode> {

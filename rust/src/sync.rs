@@ -11,6 +11,9 @@ pub struct SyncResult {
     pub errors: Vec<String>,
 }
 
+// Two transports: HTTP for WAN (daemon serves context over the internet) and
+// SSH/rsync for LAN (leverages ~/.ssh/config for auth, no daemon needed).
+// SSH is preferred for trusted home-lab peers; HTTP for public registry peers.
 enum Transport {
     Http { base_url: String },
     Ssh { host: String, path: String },
@@ -28,7 +31,9 @@ fn parse_url(url: &str) -> Result<Transport> {
         let (host, path) = rest
             .split_once(':')
             .context("SSH URL must be ssh://host:/path")?;
-        // Validate host/path — prevent argument injection via rsync
+        // Prevent argument injection: rsync treats leading '-' as flags, and shell
+        // metacharacters in the host could execute arbitrary commands. A malicious
+        // peer URL like "ssh://--server:/" would become `rsync -az --server:/ ...`.
         if host.starts_with('-') || path.starts_with('-') {
             anyhow::bail!("Invalid SSH URL: host/path cannot start with '-'");
         }
@@ -174,7 +179,8 @@ async fn pull_http_dir(
         if f.is_dir {
             continue;
         }
-        // Sanitize remote filename — extract basename, reject traversal
+        // Remote peers control the filename in the /ls response — a malicious peer
+        // could return "../../../etc/cron.d/backdoor". Extract basename to contain writes.
         let safe_name = match std::path::Path::new(&f.name)
             .file_name()
             .and_then(|n| n.to_str())
@@ -316,7 +322,9 @@ async fn sync_ssh(
     })
 }
 
-/// Move a delivered message from outbox/ to outbox/.sent/ to prevent re-delivery.
+/// Archive delivered messages to outbox/.sent/ instead of deleting them.
+/// Prevents duplicate delivery on next sync while preserving an audit trail.
+/// Without this, every sync would re-push all outbox messages to the peer.
 fn archive_sent(outbox_dir: &Path, fname: &str) -> Result<()> {
     let sent_dir = outbox_dir.join(".sent");
     fs::create_dir_all(&sent_dir)?;

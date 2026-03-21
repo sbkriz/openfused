@@ -1,3 +1,12 @@
+// --- Registry: DNS + keyserver hybrid ---
+// The registry solves agent discovery without requiring a DHT or blockchain.
+// It's a signed directory: agents register name→endpoint+publicKey mappings,
+// similar to DNS (name resolution) + PGP keyservers (key distribution).
+// Crucially, imported keys are UNTRUSTED by default — the local agent must
+// explicitly `openfuse key trust` after out-of-band verification (fingerprint check).
+// This is TOFU (Trust On First Use) done right: the registry distributes keys,
+// but never asserts trust. Trust is a local decision.
+
 import { signMessage, fingerprint } from "./crypto.js";
 import { ContextStore } from "./store.js";
 
@@ -37,6 +46,8 @@ export async function register(store: ContextStore, endpoint: string, registry: 
     capabilities: ["inbox", "shared", "knowledge"],
   };
 
+  // Canonical string prevents field-reordering attacks — pipe-delimited, deterministic order.
+  // Signature proves the registrant owns the private key (anti-squatting).
   const canonical = `${manifest.name}|${manifest.endpoint}|${manifest.publicKey}|${manifest.encryptionKey || ""}`;
   const signed = await signMessage(store.root, manifest.name, canonical);
   manifest.signature = signed.signature;
@@ -65,6 +76,8 @@ export async function discover(name: string, registry: string): Promise<Manifest
   return (await resp.json()) as Manifest;
 }
 
+// Revocation is permanent and self-authenticated: the agent signs its own revocation
+// with the key being revoked. No admin needed — if you have the private key, you can kill it.
 export async function revoke(store: ContextStore, registry: string): Promise<void> {
   const config = await store.readConfig();
   if (!config.publicKey) throw new Error("No signing key");
@@ -88,6 +101,7 @@ export async function revoke(store: ContextStore, registry: string): Promise<voi
   }
 }
 
+// Non-blocking version check with 2s timeout — never delays the CLI for a slow network.
 export async function checkUpdate(currentVersion: string): Promise<string | null> {
   try {
     const controller = new AbortController();

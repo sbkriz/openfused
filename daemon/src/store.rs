@@ -67,13 +67,16 @@ impl ContextStore {
     }
 
     pub async fn read_file(&self, path: &str) -> Option<Vec<u8>> {
+        // Two-layer defense: prefix allowlist blocks access to .keys/, inbox/, .mesh.json, etc.
+        // Canonicalization below catches symlink/.. tricks that bypass the prefix check.
         let allowed_prefixes = ["shared/", "knowledge/", "CONTEXT.md", "PROFILE.md"];
         if !allowed_prefixes.iter().any(|p| path.starts_with(p)) {
             tracing::warn!("Blocked read of restricted path: {}", path);
             return None;
         }
 
-        // Canonicalize and verify the resolved path stays inside the store root
+        // Resolve symlinks and ".." then verify we're still inside the store root.
+        // Without this, "shared/../../.keys/private.key" passes the prefix check.
         let full_path = self.root.join(path);
         let canonical = match full_path.canonicalize() {
             Ok(p) => p,
@@ -108,16 +111,20 @@ impl ContextStore {
         entries
     }
 
-    /// Write a message to the inbox directory
+    /// Write a message to the inbox directory.
+    /// Filename comes from the `from` field of an untrusted HTTP request, so we
+    /// aggressively strip it to a safe charset. This is stricter than basename
+    /// extraction because the inbox is append-only and world-writable — an attacker
+    /// controls the filename directly via POST /inbox.
     pub async fn write_inbox(&self, filename: &str, content: &str) -> Result<(), std::io::Error> {
         let inbox_dir = self.root.join("inbox");
         fs::create_dir_all(&inbox_dir).await?;
 
-        // Strict sanitization: only allow alphanumeric, dash, underscore, dot
+        // Whitelist charset + length cap. Leading dots rejected to prevent hidden files.
         let safe_name: String = filename
             .chars()
             .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
-            .take(128) // max filename length
+            .take(128)
             .collect();
         if safe_name.is_empty() || safe_name.starts_with('.') {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid filename"));

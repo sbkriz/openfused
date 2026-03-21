@@ -1,3 +1,17 @@
+// --- Store convention ---
+// The context store IS the protocol. Every agent is a directory on disk with a known layout:
+//   CONTEXT.md  — working memory (mutable, private)
+//   PROFILE.md  — public address card (replaces SOUL.md: "soul" implied private identity,
+//                 but this file is shared with peers — "profile" is honest about its visibility)
+//   inbox/      — append-only message queue from other agents
+//   outbox/     — signed envelopes waiting to be delivered
+//   shared/     — files explicitly published to peers
+//   history/    — conversation logs
+//   knowledge/  — reference docs
+//   .keys/      — Ed25519 + age keypairs (gitignored)
+//   .mesh.json  — config, peer list, keyring
+// No database, no daemon required. `ls` is your status command.
+
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { existsSync } from "node:fs";
@@ -15,7 +29,7 @@ export interface MeshConfig {
   encryptionKey?: string;
   peers: PeerConfig[];
   keyring: KeyringEntry[];
-  trustedKeys?: string[]; // legacy, migrated to keyring
+  trustedKeys?: string[]; // legacy v0.1 flat list — auto-migrated to keyring on first read
 }
 
 export interface PeerConfig {
@@ -78,7 +92,8 @@ export class ContextStore {
     const raw = await readFile(this.configPath, "utf-8");
     const config = JSON.parse(raw) as MeshConfig;
 
-    // Migrate legacy trustedKeys → keyring
+    // Migrate legacy trustedKeys → keyring (v0.1 stored bare public keys in a flat array;
+    // v0.2+ uses a GPG-style keyring with trust levels, fingerprints, and encryption keys)
     if (config.trustedKeys && config.trustedKeys.length > 0) {
       if (!config.keyring) config.keyring = [];
       for (const key of config.trustedKeys) {
@@ -138,6 +153,8 @@ export class ContextStore {
       signed = await signMessage(this.root, config.id, message);
     }
 
+    // Envelope filename encodes routing metadata so sync can match outbox files to peers
+    // without parsing JSON. Colons/dots replaced to stay filesystem-safe across OS.
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const filename = `${timestamp}_from-${config.name}_to-${peerId}.json`;
     await writeFile(join(this.root, "outbox", filename), serializeSignedMessage(signed));
@@ -220,7 +237,8 @@ export class ContextStore {
   }
 
   async share(filename: string, content: string): Promise<void> {
-    // Sanitize: extract basename, reject traversal
+    // Path traversal defense: basename extraction + ".." rejection.
+    // Critical because MCP tools pass user-supplied filenames directly.
     const base = filename.split("/").pop()!.split("\\").pop()!;
     if (!base || base === "." || base === ".." || base.includes("..")) {
       throw new Error(`Invalid filename: ${filename}`);

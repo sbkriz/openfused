@@ -86,6 +86,9 @@ export default {
   },
 };
 
+// Rate limiting via R2 instead of KV or Durable Objects — keeps the worker
+// stateless with zero additional bindings. R2 writes are cheap and the _ratelimit/
+// prefix namespace keeps them separate from real registry data.
 async function checkRateLimit(env: Env, request: Request): Promise<Response | null> {
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
   const rateLimitKey = `_ratelimit/${ip}`;
@@ -160,7 +163,8 @@ async function registerAgent(env: Env, body: string): Promise<Response> {
     return json({ error: "Name too short (min 2 characters)" }, 400);
   }
 
-  // Verify Ed25519 signature
+  // Signature verification proves the registrant actually holds the private key —
+  // prevents someone from registering a name with someone else's public key.
   const canonical = `${manifest.name}|${manifest.endpoint}|${manifest.publicKey}|${manifest.encryptionKey || ""}`;
   const payload = `${manifest.name}\n${manifest.signedAt}\n${canonical}`;
   const valid = await verifyEd25519(payload, manifest.signature, manifest.publicKey);
@@ -168,7 +172,8 @@ async function registerAgent(env: Env, body: string): Promise<Response> {
     return json({ error: "Invalid signature — manifest must be signed by the declared key" }, 403);
   }
 
-  // Check for name squatting — if name exists, key must match
+  // Anti-squatting: once a name is bound to a key, only that key can update it.
+  // Revoked names are permanently retired to prevent impersonation of former agents.
   const existing = await env.REGISTRY.get(`${safeName}/manifest.json`);
   if (existing) {
     const old: Manifest = JSON.parse(await existing.text());
@@ -220,7 +225,8 @@ async function revokeAgent(env: Env, body: string): Promise<Response> {
     return json({ error: "Already revoked" }, 410);
   }
 
-  // Verify: must be signed by the registered key
+  // Only the current key holder can revoke — the signed message includes the
+  // public key itself, binding the revocation to a specific key identity.
   const payload = `${req.name}\n${req.signedAt}\nREVOKE:${manifest.publicKey}`;
   const valid = await verifyEd25519(payload, req.signature, manifest.publicKey);
   if (!valid) {
@@ -269,7 +275,8 @@ async function rotateKey(env: Env, body: string): Promise<Response> {
     return json({ error: "Cannot rotate a revoked key" }, 410);
   }
 
-  // Verify: rotation must be signed by the CURRENT (old) key
+  // Old key signs the transition to the new key — creates a verifiable chain of
+  // custody. The signed payload includes both old and new keys to prevent replay.
   const payload = `${req.name}\n${req.signedAt}\nROTATE:${manifest.publicKey}:${req.newPublicKey}`;
   const valid = await verifyEd25519(payload, req.signature, manifest.publicKey);
   if (!valid) {
@@ -299,8 +306,8 @@ async function rotateKey(env: Env, body: string): Promise<Response> {
   });
 }
 
-// --- Ed25519 verification using Web Crypto ---
-
+// Ed25519 via Web Crypto API — no npm dependencies needed. CF Workers support
+// Ed25519 natively, so we avoid bundling tweetnacl or noble-ed25519.
 async function verifyEd25519(message: string, signatureB64: string, publicKeyHex: string): Promise<boolean> {
   try {
     const keyBytes = hexToBytes(publicKeyHex);

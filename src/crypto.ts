@@ -1,3 +1,9 @@
+// --- Why Ed25519 + age? ---
+// Ed25519: fast, deterministic, no padding oracle attacks, widely supported (SSH, FIDO2, libsodium).
+// age over PGP: simpler API, no config footguns, no Web of Trust baggage — just X25519+ChaCha20-Poly1305.
+// Two separate keypairs because signing (Ed25519) and encryption (X25519) are distinct operations;
+// combining them would violate key-separation best practice.
+
 import { generateKeyPairSync, sign, verify, createPrivateKey, createPublicKey, createHash } from "node:crypto";
 import { readFile, writeFile, mkdir, chmod } from "node:fs/promises";
 import { join } from "node:path";
@@ -59,6 +65,8 @@ export async function hasKeys(storeRoot: string): Promise<boolean> {
 }
 
 // --- Fingerprint ---
+// SHA-256 truncated to 16 bytes, displayed as colon-separated hex pairs (GPG-style).
+// Human-readable so agents can verify identities out-of-band — same UX as SSH fingerprints.
 
 export function fingerprint(publicKey: string): string {
   const hash = createHash("sha256").update(publicKey).digest();
@@ -105,6 +113,13 @@ export async function signMessage(storeRoot: string, from: string, message: stri
 
   return { from, timestamp, message, signature, publicKey, encrypted: false };
 }
+
+// --- Encrypt-then-sign ---
+// Encrypt first, then sign the ciphertext. This order matters:
+// 1. Proves WHO sent the ciphertext (non-repudiation on the encrypted blob)
+// 2. Prevents Surreptitious Forwarding — signature covers the encrypted form,
+//    so a relay can't strip the signature and re-sign for a different recipient.
+// 3. Signature is verifiable by anyone without needing the decryption key.
 
 export async function signAndEncrypt(
   storeRoot: string,
@@ -158,6 +173,8 @@ async function ageDecrypt(ciphertext: Uint8Array, storeRoot: string): Promise<st
 }
 
 // --- Helpers ---
+// XML envelope wrapping — gives LLMs a structured, parseable format with clear
+// trust signals (verified/UNVERIFIED). HTML-escaped to prevent injection into prompts.
 
 export function wrapExternalMessage(signed: SignedMessage, verified: boolean): string {
   const status = verified ? "verified" : "UNVERIFIED";

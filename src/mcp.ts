@@ -1,14 +1,21 @@
 #!/usr/bin/env node
 
+// --- MCP server: 13 tools ---
+// Why exactly 13? They map 1:1 to the store's capabilities — no more, no less.
+// CRUD for context (read/write/append), profile (read/write), inbox (list/send),
+// shared files (list/read/write), status, and peer management (list/add).
+// Every tool an LLM needs to be a full participant in the mesh, nothing it doesn't.
+// stdio transport because MCP clients (Claude Desktop, Cursor) expect it.
+
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { ContextStore } from "./store.js";
 import { resolve } from "node:path";
 
-/** Reject path traversal in filenames — extract basename, block dangerous patterns */
+// LLMs will pass whatever filenames users ask for — including "../../etc/shadow".
+// This is the trust boundary between the AI and the filesystem.
 function sanitizeFilename(name: string): string {
-  // Extract basename (strip any directory components)
   const base = name.split("/").pop()!.split("\\").pop()!;
   if (!base || base === "." || base === ".." || base.includes("..")) {
     throw new Error(`Invalid filename: ${name}`);

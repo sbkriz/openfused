@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::crypto::{self, KeyringEntry, SignedMessage};
 
+// Convention: the context store is a plain directory with well-known subdirs.
+// No database, no binary format — just files. Any tool that reads files can
+// participate in the mesh without importing a library.
 const STORE_DIRS: &[&str] = &["history", "knowledge", "inbox", "outbox", "shared"];
 
 // --- Config types ---
@@ -22,10 +25,12 @@ pub struct MeshConfig {
     #[serde(rename = "encryptionKey", skip_serializing_if = "Option::is_none")]
     pub encryption_key: Option<String>,
     pub peers: Vec<PeerConfig>,
-    /// New keyring format — replaces trusted_keys
+    /// GPG-style keyring — replaces the flat trustedKeys list so we can track
+    /// per-key metadata (trust level, fingerprint, encryption key, address).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keyring: Vec<KeyringEntry>,
-    /// Legacy field — migrated to keyring on read
+    /// Legacy v0.1 field — auto-migrated to keyring on first read so existing
+    /// stores upgrade seamlessly without manual intervention.
     #[serde(rename = "trustedKeys", skip_serializing_if = "Option::is_none")]
     pub trusted_keys: Option<Vec<String>>,
 }
@@ -100,6 +105,9 @@ impl ContextStore {
             )?;
         }
 
+        // PROFILE.md is the public address card — served to peers, synced, shown in registry.
+        // SOUL.md (if it exists) is private identity/personality — never served or synced.
+        // This split lets agents share contact info without exposing system prompts.
         let profile_path = self.root.join("PROFILE.md");
         if !profile_path.exists() {
             fs::write(
@@ -208,6 +216,9 @@ impl ContextStore {
         };
 
         let serialized = serde_json::to_string_pretty(&signed)?;
+        // Envelope filename encodes timestamp + routing so messages can be matched to
+        // recipients without parsing JSON, and colons/dots are replaced to stay
+        // filesystem-safe across OS boundaries (Windows, FAT32, etc).
         let timestamp = chrono::Utc::now()
             .to_rfc3339()
             .replace([':', '.'], "-");
@@ -318,7 +329,8 @@ impl ContextStore {
     }
 
     pub fn share(&self, filename: &str, content: &str) -> Result<()> {
-        // Sanitize: extract basename, reject traversal
+        // Extract basename to neutralize path traversal (e.g. "../../etc/passwd").
+        // file_name() strips all directory components; the ".." check is belt-and-suspenders.
         let base = std::path::Path::new(filename)
             .file_name()
             .and_then(|n| n.to_str())
