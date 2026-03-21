@@ -5,3 +5,7 @@ compatibility_date = "2025-01-01"
 [[r2_buckets]]
 binding = "REGISTRY"
 bucket_name = "openfuse-registry"
+
+[vars]
+CF_ZONE_ID = "5f2ed112d6442f0b87fae503ff28a32b"
+DNS_DOMAIN = "openfused.dev"

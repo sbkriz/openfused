@@ -1,26 +1,25 @@
 /**
- * OpenFuse Registry — DNS for AI agents.
- * CF Worker + R2. Validates signed manifests, prevents name squatting.
+ * OpenFuse Registry — DNS management API for agent discovery.
+ * Creates DNS TXT records at _openfuse.{name}.openfused.dev on registration.
+ * Reads go through DNS directly — no Worker needed for discovery.
+ * R2 is optional future social profile layer (not protocol).
  */
 
 interface Env {
-  REGISTRY: R2Bucket;
+  REGISTRY: R2Bucket;     // Future: social profiles, not protocol
+  CF_DNS_TOKEN: string;   // API token with DNS write perms
+  CF_ZONE_ID: string;     // openfused.dev zone ID
+  DNS_DOMAIN: string;     // "openfused.dev"
 }
 
-interface Manifest {
+interface RegisterRequest {
   name: string;
   endpoint: string;
   publicKey: string;
   encryptionKey?: string;
   fingerprint: string;
-  created: string;
-  capabilities: string[];
-  description?: string;
-  signature?: string;
-  signedAt?: string;
-  revoked?: boolean;
-  revokedAt?: string;
-  rotatedFrom?: string; // previous key that authorized the rotation
+  signature: string;
+  signedAt: string;
 }
 
 export default {
@@ -28,55 +27,41 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // CORS for browser access
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: corsHeaders() });
     }
 
     try {
-      // GET / — registry info + latest version (CLI checks this)
+      // GET / — service info + latest version
       if (path === "/" && request.method === "GET") {
         return json({
           service: "openfuse-registry",
-          version: "0.3.0",
-          latest: "0.3.0",
+          version: "0.4.0",
+          latest: "0.3.4",
+          dns: `*.${env.DNS_DOMAIN}`,
           changelog: "https://github.com/wearethecompute/openfused/releases",
+          discovery: "dig TXT _openfuse.{name}.openfused.dev",
         });
       }
 
-      // GET /list — list all registered agents
-      if (path === "/list" && request.method === "GET") {
-        return await listAgents(env);
-      }
-
-      // GET /discover/:name — look up an agent
-      if (path.startsWith("/discover/") && request.method === "GET") {
-        const name = path.slice("/discover/".length);
-        return await discoverAgent(env, name);
-      }
-
-      // POST /register — register or update an agent
+      // POST /register — validate signature, create DNS TXT record
       if (path === "/register" && request.method === "POST") {
         const rl = await checkRateLimit(env, request);
         if (rl) return rl;
-        const body = await request.text();
-        return await registerAgent(env, body);
+        return await register(env, await request.text());
       }
 
-      // POST /revoke — revoke an agent's key (signed by the key being revoked)
+      // POST /revoke — remove DNS TXT record (signed by key owner)
       if (path === "/revoke" && request.method === "POST") {
         const rl = await checkRateLimit(env, request);
         if (rl) return rl;
-        const body = await request.text();
-        return await revokeAgent(env, body);
+        return await revoke(env, await request.text());
       }
 
-      // POST /rotate — rotate to a new key (signed by the old key)
-      if (path === "/rotate" && request.method === "POST") {
-        const rl = await checkRateLimit(env, request);
-        if (rl) return rl;
-        const body = await request.text();
-        return await rotateKey(env, body);
+      // GET /discover/{name} — fallback for clients without DNS resolution
+      if (path.startsWith("/discover/") && request.method === "GET") {
+        const name = path.slice("/discover/".length).replace(/[^a-zA-Z0-9_-]/g, "");
+        return await discoverFallback(env, name);
       }
 
       return json({ error: "Not found" }, 404);
@@ -86,17 +71,15 @@ export default {
   },
 };
 
-// Rate limiting via R2 instead of KV or Durable Objects — keeps the worker
-// stateless with zero additional bindings. R2 writes are cheap and the _ratelimit/
-// prefix namespace keeps them separate from real registry data.
+// --- Rate limiting via R2 (zero extra bindings) ---
+
 async function checkRateLimit(env: Env, request: Request): Promise<Response | null> {
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
   const rateLimitKey = `_ratelimit/${ip}`;
   const recent = await env.REGISTRY.get(rateLimitKey);
   if (recent) {
     const ts = await recent.text();
-    const elapsed = Date.now() - new Date(ts).getTime();
-    if (elapsed < 60_000) {
+    if (Date.now() - new Date(ts).getTime() < 60_000) {
       return json({ error: "Rate limited — try again in 60 seconds" }, 429);
     }
   }
@@ -104,104 +87,57 @@ async function checkRateLimit(env: Env, request: Request): Promise<Response | nu
   return null;
 }
 
-async function listAgents(env: Env): Promise<Response> {
-  const listed = await env.REGISTRY.list();
-  const agents: { name: string; endpoint: string; fingerprint: string }[] = [];
+// --- Registration: validate signature → create DNS TXT record ---
 
-  for (const obj of listed.objects) {
-    if (!obj.key.endsWith("/manifest.json")) continue;
-    const data = await env.REGISTRY.get(obj.key);
-    if (!data) continue;
-    const manifest: Manifest = JSON.parse(await data.text());
-    agents.push({
-      name: manifest.name,
-      endpoint: manifest.endpoint,
-      fingerprint: manifest.fingerprint,
-    });
-  }
-
-  return json({ agents, count: agents.length });
-}
-
-async function discoverAgent(env: Env, name: string): Promise<Response> {
-  const safeName = name.replace(/[^a-zA-Z0-9_-]/g, "");
-  const obj = await env.REGISTRY.get(`${safeName}/manifest.json`);
-  if (!obj) {
-    return json({ error: `Agent '${safeName}' not found` }, 404);
-  }
-
-  const manifest: Manifest = JSON.parse(await obj.text());
-  return json(manifest);
-}
-
-async function registerAgent(env: Env, body: string): Promise<Response> {
-  let manifest: Manifest;
+async function register(env: Env, body: string): Promise<Response> {
+  let req: RegisterRequest;
   try {
-    manifest = JSON.parse(body);
+    req = JSON.parse(body);
   } catch {
     return json({ error: "Invalid JSON" }, 400);
   }
 
-  // Validate required fields
-  if (!manifest.name || !manifest.endpoint || !manifest.publicKey || !manifest.fingerprint) {
-    return json({ error: "Missing required fields: name, endpoint, publicKey, fingerprint" }, 400);
+  if (!req.name || !req.endpoint || !req.publicKey || !req.fingerprint || !req.signature || !req.signedAt) {
+    return json({ error: "Missing required fields" }, 400);
   }
 
-  if (!manifest.signature || !manifest.signedAt) {
-    return json({ error: "Manifest must be signed (signature + signedAt required)" }, 400);
-  }
+  const safeName = req.name.replace(/[^a-zA-Z0-9_-]/g, "");
+  if (safeName !== req.name) return json({ error: "Name: a-z, 0-9, -, _ only" }, 400);
+  if (safeName.length > 64) return json({ error: "Name too long (max 64)" }, 400);
+  if (safeName.length < 2) return json({ error: "Name too short (min 2)" }, 400);
 
-  // Sanitize name
-  const safeName = manifest.name.replace(/[^a-zA-Z0-9_-]/g, "");
-  if (safeName !== manifest.name) {
-    return json({ error: "Name contains invalid characters (use a-z, 0-9, -, _)" }, 400);
-  }
-  if (safeName.length > 64) {
-    return json({ error: "Name too long (max 64 characters)" }, 400);
-  }
-  if (safeName.length < 2) {
-    return json({ error: "Name too short (min 2 characters)" }, 400);
-  }
-
-  // Signature verification proves the registrant actually holds the private key —
-  // prevents someone from registering a name with someone else's public key.
-  const canonical = `${manifest.name}|${manifest.endpoint}|${manifest.publicKey}|${manifest.encryptionKey || ""}`;
-  const payload = `${manifest.name}\n${manifest.signedAt}\n${canonical}`;
-  const valid = await verifyEd25519(payload, manifest.signature, manifest.publicKey);
+  // Verify Ed25519 signature
+  const canonical = `${req.name}|${req.endpoint}|${req.publicKey}|${req.encryptionKey || ""}`;
+  const payload = `${req.name}\n${req.signedAt}\n${canonical}`;
+  const valid = await verifyEd25519(payload, req.signature, req.publicKey);
   if (!valid) {
-    return json({ error: "Invalid signature — manifest must be signed by the declared key" }, 403);
+    return json({ error: "Invalid signature" }, 403);
   }
 
-  // Anti-squatting: once a name is bound to a key, only that key can update it.
-  // Revoked names are permanently retired to prevent impersonation of former agents.
-  const existing = await env.REGISTRY.get(`${safeName}/manifest.json`);
+  // Anti-squatting: check if name is already taken by a different key
+  const existing = await lookupDnsTxt(env, safeName);
   if (existing) {
-    const old: Manifest = JSON.parse(await existing.text());
-    if (old.revoked) {
-      return json({ error: `Name '${safeName}' has been revoked and cannot be re-registered` }, 410);
-    }
-    if (old.publicKey !== manifest.publicKey) {
-      return json(
-        { error: `Name '${safeName}' is already registered to a different key (fingerprint: ${old.fingerprint})` },
-        409
-      );
+    const fields = parseTxt(existing);
+    if (fields.pk && fields.pk !== req.publicKey) {
+      return json({ error: `Name '${safeName}' is registered to a different key` }, 409);
     }
   }
 
-  // Write to R2
-  await env.REGISTRY.put(`${safeName}/manifest.json`, JSON.stringify(manifest, null, 2));
+  // Create/update DNS TXT record
+  const txtContent = `v=of1 e=${req.endpoint} pk=${req.publicKey} ek=${req.encryptionKey || ""} fp=${req.fingerprint}`;
+  await upsertDnsTxt(env, safeName, txtContent);
 
   return json({
     ok: true,
     name: safeName,
-    fingerprint: manifest.fingerprint,
-    endpoint: manifest.endpoint,
-  }, existing ? 200 : 201);
+    dns: `_openfuse.${safeName}.${env.DNS_DOMAIN}`,
+    fingerprint: req.fingerprint,
+  }, 201);
 }
 
-// --- Revocation ---
+// --- Revocation: validate signature → delete DNS TXT ---
 
-async function revokeAgent(env: Env, body: string): Promise<Response> {
+async function revoke(env: Env, body: string): Promise<Response> {
   let req: { name: string; signature: string; signedAt: string };
   try {
     req = JSON.parse(body);
@@ -210,118 +146,109 @@ async function revokeAgent(env: Env, body: string): Promise<Response> {
   }
 
   if (!req.name || !req.signature || !req.signedAt) {
-    return json({ error: "Missing required fields: name, signature, signedAt" }, 400);
-  }
-
-  const safeName = req.name.replace(/[^a-zA-Z0-9_-]/g, "");
-  const obj = await env.REGISTRY.get(`${safeName}/manifest.json`);
-  if (!obj) {
-    return json({ error: `Agent '${safeName}' not found` }, 404);
-  }
-
-  const manifest: Manifest = JSON.parse(await obj.text());
-
-  if (manifest.revoked) {
-    return json({ error: "Already revoked" }, 410);
-  }
-
-  // Only the current key holder can revoke — the signed message includes the
-  // public key itself, binding the revocation to a specific key identity.
-  const payload = `${req.name}\n${req.signedAt}\nREVOKE:${manifest.publicKey}`;
-  const valid = await verifyEd25519(payload, req.signature, manifest.publicKey);
-  if (!valid) {
-    return json({ error: "Invalid signature — revocation must be signed by the registered key" }, 403);
-  }
-
-  // Mark as revoked
-  manifest.revoked = true;
-  manifest.revokedAt = new Date().toISOString();
-  await env.REGISTRY.put(`${safeName}/manifest.json`, JSON.stringify(manifest, null, 2));
-
-  return json({ ok: true, name: safeName, status: "revoked" });
-}
-
-// --- Key Rotation ---
-
-async function rotateKey(env: Env, body: string): Promise<Response> {
-  let req: {
-    name: string;
-    newPublicKey: string;
-    newEncryptionKey?: string;
-    newFingerprint: string;
-    newEndpoint?: string;
-    signature: string;   // signed by OLD key
-    signedAt: string;
-  };
-  try {
-    req = JSON.parse(body);
-  } catch {
-    return json({ error: "Invalid JSON" }, 400);
-  }
-
-  if (!req.name || !req.newPublicKey || !req.newFingerprint || !req.signature || !req.signedAt) {
     return json({ error: "Missing required fields" }, 400);
   }
 
   const safeName = req.name.replace(/[^a-zA-Z0-9_-]/g, "");
-  const obj = await env.REGISTRY.get(`${safeName}/manifest.json`);
-  if (!obj) {
-    return json({ error: `Agent '${safeName}' not found` }, 404);
-  }
 
-  const manifest: Manifest = JSON.parse(await obj.text());
+  // Look up current key from DNS
+  const existing = await lookupDnsTxt(env, safeName);
+  if (!existing) return json({ error: `Agent '${safeName}' not found` }, 404);
 
-  if (manifest.revoked) {
-    return json({ error: "Cannot rotate a revoked key" }, 410);
-  }
+  const fields = parseTxt(existing);
+  if (!fields.pk) return json({ error: "Corrupted DNS record" }, 500);
 
-  // Old key signs the transition to the new key — creates a verifiable chain of
-  // custody. The signed payload includes both old and new keys to prevent replay.
-  const payload = `${req.name}\n${req.signedAt}\nROTATE:${manifest.publicKey}:${req.newPublicKey}`;
-  const valid = await verifyEd25519(payload, req.signature, manifest.publicKey);
-  if (!valid) {
-    return json({ error: "Invalid signature — rotation must be signed by the current registered key" }, 403);
-  }
+  // Verify revocation is signed by the registered key
+  const payload = `${req.name}\n${req.signedAt}\nREVOKE:${fields.pk}`;
+  const valid = await verifyEd25519(payload, req.signature, fields.pk);
+  if (!valid) return json({ error: "Invalid signature — must be signed by the registered key" }, 403);
 
-  // Update manifest with new key
-  const oldKey = manifest.publicKey;
-  manifest.publicKey = req.newPublicKey;
-  manifest.fingerprint = req.newFingerprint;
-  manifest.rotatedFrom = oldKey;
-  if (req.newEncryptionKey) {
-    manifest.encryptionKey = req.newEncryptionKey;
-  }
-  if (req.newEndpoint) {
-    manifest.endpoint = req.newEndpoint;
-  }
+  // Delete DNS record
+  await deleteDnsTxt(env, safeName);
 
-  await env.REGISTRY.put(`${safeName}/manifest.json`, JSON.stringify(manifest, null, 2));
+  return json({ ok: true, name: safeName, status: "revoked" });
+}
 
+// --- Discovery fallback (for clients without DNS resolution) ---
+
+async function discoverFallback(env: Env, name: string): Promise<Response> {
+  const txt = await lookupDnsTxt(env, name);
+  if (!txt) return json({ error: `Agent '${name}' not found` }, 404);
+
+  const fields = parseTxt(txt);
   return json({
-    ok: true,
-    name: safeName,
-    oldFingerprint: manifest.rotatedFrom,
-    newFingerprint: req.newFingerprint,
-    status: "rotated",
+    name,
+    endpoint: fields.e || "",
+    publicKey: fields.pk || "",
+    encryptionKey: fields.ek || undefined,
+    fingerprint: fields.fp || "",
+    capabilities: ["inbox", "shared", "knowledge"],
+    dns: `_openfuse.${name}.${env.DNS_DOMAIN}`,
   });
 }
 
-// Ed25519 via Web Crypto API — no npm dependencies needed. CF Workers support
-// Ed25519 natively, so we avoid bundling tweetnacl or noble-ed25519.
+// --- DNS TXT management ---
+
+async function lookupDnsTxt(env: Env, name: string): Promise<string | null> {
+  const recordName = `_openfuse.${name}.${env.DNS_DOMAIN}`;
+  const resp = await fetch(
+    `https://api.cloudflare.com/client/v4/zones/${env.CF_ZONE_ID}/dns_records?type=TXT&name=${recordName}`,
+    { headers: { "Authorization": `Bearer ${env.CF_DNS_TOKEN}`, "Content-Type": "application/json" } }
+  );
+  const data = await resp.json() as { result?: { content: string }[] };
+  if (data.result && data.result.length > 0) return data.result[0].content;
+  return null;
+}
+
+async function upsertDnsTxt(env: Env, name: string, content: string): Promise<void> {
+  const recordName = `_openfuse.${name}.${env.DNS_DOMAIN}`;
+  const baseUrl = `https://api.cloudflare.com/client/v4/zones/${env.CF_ZONE_ID}/dns_records`;
+  const headers = { "Authorization": `Bearer ${env.CF_DNS_TOKEN}`, "Content-Type": "application/json" };
+
+  // Delete existing record if any
+  const search = await fetch(`${baseUrl}?type=TXT&name=${recordName}`, { headers });
+  const data = await search.json() as { result?: { id: string }[] };
+  if (data.result && data.result.length > 0) {
+    await fetch(`${baseUrl}/${data.result[0].id}`, { method: "DELETE", headers });
+  }
+
+  // Create new record
+  await fetch(baseUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ type: "TXT", name: recordName, content, ttl: 300 }),
+  });
+}
+
+async function deleteDnsTxt(env: Env, name: string): Promise<void> {
+  const recordName = `_openfuse.${name}.${env.DNS_DOMAIN}`;
+  const baseUrl = `https://api.cloudflare.com/client/v4/zones/${env.CF_ZONE_ID}/dns_records`;
+  const headers = { "Authorization": `Bearer ${env.CF_DNS_TOKEN}`, "Content-Type": "application/json" };
+
+  const search = await fetch(`${baseUrl}?type=TXT&name=${recordName}`, { headers });
+  const data = await search.json() as { result?: { id: string }[] };
+  if (data.result && data.result.length > 0) {
+    await fetch(`${baseUrl}/${data.result[0].id}`, { method: "DELETE", headers });
+  }
+}
+
+function parseTxt(txt: string): Record<string, string> {
+  const fields: Record<string, string> = {};
+  for (const part of txt.split(" ")) {
+    const eq = part.indexOf("=");
+    if (eq > 0) fields[part.slice(0, eq)] = part.slice(eq + 1);
+  }
+  return fields;
+}
+
+// --- Ed25519 via Web Crypto ---
+
 async function verifyEd25519(message: string, signatureB64: string, publicKeyHex: string): Promise<boolean> {
   try {
     const keyBytes = hexToBytes(publicKeyHex);
-    const key = await crypto.subtle.importKey(
-      "raw",
-      keyBytes,
-      { name: "Ed25519" },
-      false,
-      ["verify"]
-    );
-
+    const key = await crypto.subtle.importKey("raw", keyBytes, { name: "Ed25519" }, false, ["verify"]);
     const sigBytes = base64ToBytes(signatureB64);
     const msgBytes = new TextEncoder().encode(message);
-
     return await crypto.subtle.verify("Ed25519", key, sigBytes, msgBytes);
   } catch {
     return false;
@@ -330,18 +257,14 @@ async function verifyEd25519(message: string, signatureB64: string, publicKeyHex
 
 function hexToBytes(hex: string): Uint8Array {
   const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
-  }
+  for (let i = 0; i < hex.length; i += 2) bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
   return bytes;
 }
 
 function base64ToBytes(b64: string): Uint8Array {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return bytes;
 }
 

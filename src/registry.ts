@@ -67,13 +67,65 @@ export async function register(store: ContextStore, endpoint: string, registry: 
   return manifest;
 }
 
+// Discovery: try DNS TXT first (decentralized, no registry needed), fall back to Worker API.
+// DNS format: v=of1 e={endpoint} pk={pubkey} ek={agekey} fp={fingerprint}
+// Self-hosted: _openfuse.{name}.{their-domain} — user manages their own TXT records.
+// Our zone: _openfuse.{name}.openfused.dev — managed by the registry Worker on registration.
 export async function discover(name: string, registry: string): Promise<Manifest> {
+  // If name contains a dot, it's a domain — try DNS TXT directly
+  // Otherwise try DNS at openfused.dev, then fall back to registry API
+  const dnsNames = name.includes(".")
+    ? [`_openfuse.${name}`]
+    : [`_openfuse.${name}.openfused.dev`];
+
+  for (const dnsName of dnsNames) {
+    const manifest = await discoverViaDns(dnsName, name);
+    if (manifest) return manifest;
+  }
+
+  // Fall back to registry API
   const resp = await fetch(`${registry.replace(/\/$/, "")}/discover/${name}`);
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` })) as { error?: string };
     throw new Error(body.error || `Agent '${name}' not found`);
   }
   return (await resp.json()) as Manifest;
+}
+
+async function discoverViaDns(dnsName: string, agentName: string): Promise<Manifest | null> {
+  try {
+    // Use DNS-over-HTTPS (Cloudflare 1.1.1.1) to resolve TXT records
+    const resp = await fetch(`https://1.1.1.1/dns-query?name=${dnsName}&type=TXT`, {
+      headers: { "Accept": "application/dns-json" },
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json() as { Answer?: { data: string }[] };
+    if (!data.Answer || data.Answer.length === 0) return null;
+
+    // Parse v=of1 format from TXT record
+    const txt = data.Answer[0].data.replace(/"/g, "");
+    if (!txt.startsWith("v=of1")) return null;
+
+    const fields: Record<string, string> = {};
+    for (const part of txt.split(" ")) {
+      const [k, v] = part.split("=", 2);
+      if (k && v) fields[k] = v;
+    }
+
+    if (!fields.e || !fields.pk) return null;
+
+    return {
+      name: agentName,
+      endpoint: fields.e,
+      publicKey: fields.pk,
+      encryptionKey: fields.ek || undefined,
+      fingerprint: fields.fp || "",
+      created: "",
+      capabilities: ["inbox", "shared", "knowledge"],
+    };
+  } catch {
+    return null;
+  }
 }
 
 // Revocation is permanent and self-authenticated: the agent signs its own revocation

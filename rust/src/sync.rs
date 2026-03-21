@@ -298,6 +298,7 @@ async fn sync_ssh(
                 "-az", "--ignore-existing",
                 "--include", &format!("*_to-{}.json", my_name),
                 "--include", "*_to-all.json",
+                "--include", &format!("*_{}.json", my_name),  // legacy format
                 "--exclude", "*",
                 &src, &dst,
             ])

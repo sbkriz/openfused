@@ -211,6 +211,7 @@ async function syncSsh(
       "-az", "--ignore-existing",
       "--include", `*_to-${myName}.json`,
       "--include", `*_to-all.json`,
+      "--include", `*_${myName}.json`,   // legacy format (pre-envelope)
       "--exclude", "*",
       `${host}:${remotePath}/outbox/`,
       `${inboxDir}/`,
