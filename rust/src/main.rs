@@ -644,11 +644,13 @@ async fn main() -> Result<()> {
                         signing_key: manifest.public_key.clone(),
                         encryption_key: manifest.encryption_key.clone(),
                         fingerprint: manifest.fingerprint.clone(),
-                        trusted: true, // Auto-trust from signed manifest
+                        trusted: false, // Imported but NOT trusted — requires explicit `openfuse key trust`
                         added: chrono::Utc::now().to_rfc3339(),
                     });
                     s.write_config(&config)?;
-                    println!("Imported key for {} from registry", manifest.name);
+                    println!("Imported key for {} from registry [untrusted]", manifest.name);
+                    println!("  Fingerprint: {}", manifest.fingerprint);
+                    println!("  Run `openfuse key trust {}` to trust this key", manifest.name);
                 }
 
                 // Send the message (auto-encrypts if age key available)
