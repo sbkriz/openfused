@@ -106,6 +106,16 @@ async function register(env: Env, body: string): Promise<Response> {
   if (safeName.length > 64) return json({ error: "Name too long (max 64)" }, 400);
   if (safeName.length < 2) return json({ error: "Name too short (min 2)" }, 400);
 
+  // Validate endpoint — must be a URL, not arbitrary text/scripts
+  try {
+    const url = new URL(req.endpoint);
+    if (!["http:", "https:"].includes(url.protocol)) {
+      return json({ error: "Public registry requires http:// or https:// endpoint. SSH peers go in your local address book." }, 400);
+    }
+  } catch {
+    return json({ error: "Invalid endpoint URL" }, 400);
+  }
+
   // Verify Ed25519 signature
   const canonical = `${req.name}|${req.endpoint}|${req.publicKey}|${req.encryptionKey || ""}`;
   const payload = `${req.name}\n${req.signedAt}\n${canonical}`;
@@ -123,7 +133,7 @@ async function register(env: Env, body: string): Promise<Response> {
     }
   }
 
-  // Create/update DNS TXT record
+  // Create DNS TXT record — all public endpoints are HTTP (SSH rejected above)
   const txtContent = `v=of1 e=${req.endpoint} pk=${req.publicKey} ek=${req.encryptionKey || ""} fp=${req.fingerprint}`;
   await upsertDnsTxt(env, safeName, txtContent);
 
