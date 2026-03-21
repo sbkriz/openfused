@@ -211,7 +211,7 @@ impl ContextStore {
         let timestamp = chrono::Utc::now()
             .to_rfc3339()
             .replace([':', '.'], "-");
-        let filename = format!("{}_{}.json", timestamp, peer_id);
+        let filename = format!("{}_from-{}_to-{}.json", timestamp, config.name, peer_id);
         fs::write(self.root.join("outbox").join(&filename), &serialized)?;
         Ok(())
     }

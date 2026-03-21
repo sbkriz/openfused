@@ -139,7 +139,7 @@ export class ContextStore {
     }
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filename = `${timestamp}_${peerId}.json`;
+    const filename = `${timestamp}_from-${config.name}_to-${peerId}.json`;
     await writeFile(join(this.root, "outbox", filename), serializeSignedMessage(signed));
   }
 

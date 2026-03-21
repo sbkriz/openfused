@@ -100,10 +100,13 @@ async fn receive_inbox(
     }
 
     let from = msg["from"].as_str().unwrap_or("unknown");
+    let to = store.config().await
+        .map(|c| c.name)
+        .unwrap_or_else(|| "unknown".to_string());
     let timestamp = chrono::Utc::now()
         .to_rfc3339()
         .replace([':', '.'], "-");
-    let filename = format!("{}_{}.json", timestamp, from);
+    let filename = format!("{}_from-{}_to-{}.json", timestamp, from, to);
 
     store
         .write_inbox(&filename, &body)

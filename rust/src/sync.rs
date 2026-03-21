@@ -216,7 +216,7 @@ async fn push_http_outbox(
             continue;
         }
         // Only push messages addressed to this peer
-        if !fname.contains(&peer.name) && !fname.contains(&peer.id) {
+        if !fname.contains(&format!("_to-{}", peer.name)) && !fname.contains(&peer.id) {
             continue;
         }
 
@@ -287,7 +287,7 @@ async fn sync_ssh(
             if !fname.ends_with(".json") {
                 continue;
             }
-            if !fname.contains(&peer.name) && !fname.contains(&peer.id) {
+            if !fname.contains(&format!("_to-{}", peer.name)) && !fname.contains(&peer.id) {
                 continue;
             }
 
