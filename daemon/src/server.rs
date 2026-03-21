@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::StatusCode,
     response::Json,
     routing::{get, post},
@@ -21,6 +21,7 @@ pub async fn serve(store_path: PathBuf, bind: &str, port: u16) {
         .route("/read/{*path}", get(read_file))
         .route("/config", get(get_config))
         .route("/inbox", post(receive_inbox))
+        .layer(DefaultBodyLimit::max(1024 * 1024)) // 1MB max request body
         .layer(CorsLayer::permissive())
         .with_state(store);
 

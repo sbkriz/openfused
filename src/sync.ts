@@ -28,7 +28,16 @@ function parseUrl(url: string): Transport {
     const rest = url.slice(6);
     const colonIdx = rest.indexOf(":");
     if (colonIdx === -1) throw new Error("SSH URL must be ssh://host:/path");
-    return { type: "ssh", host: rest.slice(0, colonIdx), path: rest.slice(colonIdx + 1) };
+    const host = rest.slice(0, colonIdx);
+    const path = rest.slice(colonIdx + 1);
+    // Validate: prevent argument injection via rsync
+    if (host.startsWith("-") || path.startsWith("-")) {
+      throw new Error("Invalid SSH URL: host/path cannot start with '-'");
+    }
+    if (/[;|`$]/.test(host)) {
+      throw new Error("Invalid SSH URL: host contains shell metacharacters");
+    }
+    return { type: "ssh", host, path };
   }
   throw new Error(`Unknown URL scheme: ${url}. Use http:// or ssh://`);
 }
@@ -80,7 +89,7 @@ async function syncHttp(
   const pushed: string[] = [];
   const errors: string[] = [];
 
-  for (const file of ["CONTEXT.md"]) {
+  for (const file of ["CONTEXT.md"]) { // SOUL.md is private — not synced
     try {
       const resp = await fetch(`${baseUrl}/read/${file}`);
       if (resp.ok) {
@@ -101,10 +110,13 @@ async function syncHttp(
       await mkdir(localDir, { recursive: true });
       for (const f of files) {
         if (f.is_dir) continue;
-        const r = await fetch(`${baseUrl}/read/${dir}/${f.name}`);
+        // Sanitize remote filename — extract basename, reject traversal
+        const safeName = f.name.split("/").pop()!.split("\\").pop()!;
+        if (!safeName || safeName.includes("..")) continue;
+        const r = await fetch(`${baseUrl}/read/${dir}/${safeName}`);
         if (r.ok) {
-          await writeFile(join(localDir, f.name), Buffer.from(await r.arrayBuffer()));
-          pulled.push(`${dir}/${f.name}`);
+          await writeFile(join(localDir, safeName), Buffer.from(await r.arrayBuffer()));
+          pulled.push(`${dir}/${safeName}`);
         }
       }
     } catch (e: any) {
@@ -150,7 +162,7 @@ async function syncSsh(
   const pushed: string[] = [];
   const errors: string[] = [];
 
-  for (const file of ["CONTEXT.md"]) {
+  for (const file of ["CONTEXT.md"]) { // SOUL.md is private — not synced
     try {
       await execFile("rsync", ["-az", `${host}:${remotePath}/${file}`, join(peerDir, file)]);
       pulled.push(file);

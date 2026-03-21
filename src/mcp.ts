@@ -6,6 +6,16 @@ import { z } from "zod";
 import { ContextStore } from "./store.js";
 import { resolve } from "node:path";
 
+/** Reject path traversal in filenames — extract basename, block dangerous patterns */
+function sanitizeFilename(name: string): string {
+  // Extract basename (strip any directory components)
+  const base = name.split("/").pop()!.split("\\").pop()!;
+  if (!base || base === "." || base === ".." || base.includes("..")) {
+    throw new Error(`Invalid filename: ${name}`);
+  }
+  return base;
+}
+
 const storeDir = process.env.OPENFUSE_DIR || process.argv[3] || ".";
 const store = new ContextStore(resolve(storeDir));
 
@@ -101,9 +111,10 @@ server.tool(
   "Read a file from shared/",
   { filename: z.string().describe("Filename in shared/") },
   async ({ filename }) => {
+    const safeName = sanitizeFilename(filename);
     const { readFile } = await import("node:fs/promises");
     const { join } = await import("node:path");
-    const content = await readFile(join(store.root, "shared", filename), "utf-8");
+    const content = await readFile(join(store.root, "shared", safeName), "utf-8");
     return { content: [{ type: "text", text: content }] };
   }
 );
@@ -116,8 +127,9 @@ server.tool(
     content: z.string().describe("File content"),
   },
   async ({ filename, content }) => {
-    await store.share(filename, content);
-    return { content: [{ type: "text", text: `Shared: ${filename}` }] };
+    const safeName = sanitizeFilename(filename);
+    await store.share(safeName, content);
+    return { content: [{ type: "text", text: `Shared: ${safeName}` }] };
   }
 );
 

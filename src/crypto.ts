@@ -161,8 +161,9 @@ async function ageDecrypt(ciphertext: Uint8Array, storeRoot: string): Promise<st
 
 export function wrapExternalMessage(signed: SignedMessage, verified: boolean): string {
   const status = verified ? "verified" : "UNVERIFIED";
-  return `<external_message from="${signed.from}" verified="${verified}" time="${signed.timestamp}" status="${status}">
-${signed.message}
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return `<external_message from="${esc(signed.from)}" verified="${verified}" time="${esc(signed.timestamp)}" status="${status}">
+${esc(signed.message)}
 </external_message>`;
 }
 

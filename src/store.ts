@@ -220,9 +220,14 @@ export class ContextStore {
   }
 
   async share(filename: string, content: string): Promise<void> {
+    // Sanitize: extract basename, reject traversal
+    const base = filename.split("/").pop()!.split("\\").pop()!;
+    if (!base || base === "." || base === ".." || base.includes("..")) {
+      throw new Error(`Invalid filename: ${filename}`);
+    }
     const sharedDir = join(this.root, "shared");
     await mkdir(sharedDir, { recursive: true });
-    await writeFile(join(sharedDir, filename), content);
+    await writeFile(join(sharedDir, base), content);
   }
 
   // --- Status ---

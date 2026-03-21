@@ -57,36 +57,24 @@ export default {
 
       // POST /register — register or update an agent
       if (path === "/register" && request.method === "POST") {
-        // Rate limit: 1 registration per IP per 60 seconds
-        const ip = request.headers.get("CF-Connecting-IP") || "unknown";
-        const rateLimitKey = `_ratelimit/${ip}`;
-        const recent = await env.REGISTRY.get(rateLimitKey);
-        if (recent) {
-          const ts = await recent.text();
-          const elapsed = Date.now() - new Date(ts).getTime();
-          if (elapsed < 60_000) {
-            return json({ error: "Rate limited — try again in 60 seconds" }, 429);
-          }
-        }
-
+        const rl = await checkRateLimit(env, request);
+        if (rl) return rl;
         const body = await request.text();
-        const result = await registerAgent(env, body);
-
-        if (result.status < 400) {
-          await env.REGISTRY.put(rateLimitKey, new Date().toISOString());
-        }
-
-        return result;
+        return await registerAgent(env, body);
       }
 
       // POST /revoke — revoke an agent's key (signed by the key being revoked)
       if (path === "/revoke" && request.method === "POST") {
+        const rl = await checkRateLimit(env, request);
+        if (rl) return rl;
         const body = await request.text();
         return await revokeAgent(env, body);
       }
 
       // POST /rotate — rotate to a new key (signed by the old key)
       if (path === "/rotate" && request.method === "POST") {
+        const rl = await checkRateLimit(env, request);
+        if (rl) return rl;
         const body = await request.text();
         return await rotateKey(env, body);
       }
@@ -97,6 +85,21 @@ export default {
     }
   },
 };
+
+async function checkRateLimit(env: Env, request: Request): Promise<Response | null> {
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  const rateLimitKey = `_ratelimit/${ip}`;
+  const recent = await env.REGISTRY.get(rateLimitKey);
+  if (recent) {
+    const ts = await recent.text();
+    const elapsed = Date.now() - new Date(ts).getTime();
+    if (elapsed < 60_000) {
+      return json({ error: "Rate limited — try again in 60 seconds" }, 429);
+    }
+  }
+  await env.REGISTRY.put(rateLimitKey, new Date().toISOString());
+  return null;
+}
 
 async function listAgents(env: Env): Promise<Response> {
   const listed = await env.REGISTRY.list();
@@ -149,6 +152,12 @@ async function registerAgent(env: Env, body: string): Promise<Response> {
   const safeName = manifest.name.replace(/[^a-zA-Z0-9_-]/g, "");
   if (safeName !== manifest.name) {
     return json({ error: "Name contains invalid characters (use a-z, 0-9, -, _)" }, 400);
+  }
+  if (safeName.length > 64) {
+    return json({ error: "Name too long (max 64 characters)" }, 400);
+  }
+  if (safeName.length < 2) {
+    return json({ error: "Name too short (min 2 characters)" }, 400);
   }
 
   // Verify Ed25519 signature

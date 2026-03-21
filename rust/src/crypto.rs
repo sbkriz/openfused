@@ -236,8 +236,9 @@ fn age_decrypt(ciphertext: &[u8], store_root: &Path) -> Result<Vec<u8>> {
 
 pub fn wrap_external_message(signed: &SignedMessage, verified: bool) -> String {
     let status = if verified { "verified" } else { "UNVERIFIED" };
+    let esc = |s: &str| s.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;");
     format!(
         "<external_message from=\"{}\" verified=\"{}\" time=\"{}\" status=\"{}\">\n{}\n</external_message>",
-        signed.from, verified, signed.timestamp, status, signed.message
+        esc(&signed.from), verified, esc(&signed.timestamp), status, esc(&signed.message)
     )
 }

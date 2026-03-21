@@ -318,9 +318,15 @@ impl ContextStore {
     }
 
     pub fn share(&self, filename: &str, content: &str) -> Result<()> {
+        // Sanitize: extract basename, reject traversal
+        let base = std::path::Path::new(filename)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|n| !n.is_empty() && !n.contains(".."))
+            .ok_or_else(|| anyhow::anyhow!("Invalid filename: {}", filename))?;
         let shared_dir = self.root.join("shared");
         fs::create_dir_all(&shared_dir)?;
-        fs::write(shared_dir.join(filename), content)?;
+        fs::write(shared_dir.join(base), content)?;
         Ok(())
     }
 

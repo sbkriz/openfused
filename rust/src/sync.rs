@@ -28,6 +28,13 @@ fn parse_url(url: &str) -> Result<Transport> {
         let (host, path) = rest
             .split_once(':')
             .context("SSH URL must be ssh://host:/path")?;
+        // Validate host/path — prevent argument injection via rsync
+        if host.starts_with('-') || path.starts_with('-') {
+            anyhow::bail!("Invalid SSH URL: host/path cannot start with '-'");
+        }
+        if host.contains(';') || host.contains('|') || host.contains('`') || host.contains('$') {
+            anyhow::bail!("Invalid SSH URL: host contains shell metacharacters");
+        }
         Ok(Transport::Ssh {
             host: host.to_string(),
             path: path.to_string(),
@@ -92,7 +99,7 @@ async fn sync_http(
     let mut errors = vec![];
 
     // Pull root files
-    for file in &["CONTEXT.md", "SOUL.md"] {
+    for file in &["CONTEXT.md"] {
         match client
             .get(format!("{}/read/{}", base_url, file))
             .send()
@@ -167,14 +174,23 @@ async fn pull_http_dir(
         if f.is_dir {
             continue;
         }
+        // Sanitize remote filename — extract basename, reject traversal
+        let safe_name = match std::path::Path::new(&f.name)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|n| !n.is_empty() && !n.contains(".."))
+        {
+            Some(n) => n.to_string(),
+            None => continue, // skip malicious filenames
+        };
         let resp = client
-            .get(format!("{}/read/{}/{}", base_url, dir, f.name))
+            .get(format!("{}/read/{}/{}", base_url, dir, safe_name))
             .send()
             .await?;
         if resp.status().is_success() {
             let body = resp.bytes().await?;
-            fs::write(local_dir.join(&f.name), &body)?;
-            pulled.push(format!("{}/{}", dir, f.name));
+            fs::write(local_dir.join(&safe_name), &body)?;
+            pulled.push(format!("{}/{}", dir, safe_name));
         }
     }
 
@@ -237,7 +253,7 @@ async fn sync_ssh(
     let mut errors = vec![];
 
     // Pull root files
-    for file in &["CONTEXT.md", "SOUL.md"] {
+    for file in &["CONTEXT.md"] {
         let src = format!("{}:{}/{}", host, remote_path, file);
         let dst = peer_dir.join(file);
         match rsync(&src, &dst.to_string_lossy()).await {

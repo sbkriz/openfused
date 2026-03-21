@@ -74,13 +74,22 @@ impl ContextStore {
             return None;
         }
 
-        if path.contains("..") {
-            tracing::warn!("Blocked path traversal attempt: {}", path);
+        // Canonicalize and verify the resolved path stays inside the store root
+        let full_path = self.root.join(path);
+        let canonical = match full_path.canonicalize() {
+            Ok(p) => p,
+            Err(_) => return None,
+        };
+        let root_canonical = match self.root.canonicalize() {
+            Ok(p) => p,
+            Err(_) => return None,
+        };
+        if !canonical.starts_with(&root_canonical) {
+            tracing::warn!("Blocked path traversal: {} resolved to {}", path, canonical.display());
             return None;
         }
 
-        let full_path = self.root.join(path);
-        fs::read(&full_path).await.ok()
+        fs::read(&canonical).await.ok()
     }
 
     pub async fn list_root(&self) -> Vec<FileEntry> {
@@ -106,10 +115,16 @@ impl ContextStore {
         let inbox_dir = self.root.join("inbox");
         fs::create_dir_all(&inbox_dir).await?;
 
-        // Sanitize filename
-        let safe_name = filename
-            .replace(['/', '\\'], "_")
-            .replace("..", "_");
+        // Strict sanitization: only allow alphanumeric, dash, underscore, dot
+        let safe_name: String = filename
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+            .take(128) // max filename length
+            .collect();
+        if safe_name.is_empty() || safe_name.starts_with('.') {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid filename"));
+        }
+
         fs::write(inbox_dir.join(safe_name), content).await
     }
 }
