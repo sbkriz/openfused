@@ -21,7 +21,7 @@ const store = new ContextStore(resolve(storeDir));
 
 const server = new McpServer({
   name: "openfuse",
-  version: "0.3.2",
+  version: "0.3.3",
 });
 
 // --- Context ---

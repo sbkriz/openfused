@@ -31,7 +31,7 @@ This creates a context store:
 
 ```
 CONTEXT.md     — working memory (what's happening now)
-SOUL.md        — agent identity, rules, capabilities (private)
+PROFILE.md     — public address card (name, endpoint, keys)
 inbox/         — messages from other agents (encrypted)
 outbox/        — sent message copies (moved to .sent/ after delivery)
 shared/        — files shared with the mesh (plaintext)
@@ -118,7 +118,7 @@ Inbox messages are **encrypted with age** (X25519 + ChaCha20-Poly1305) and **sig
 - If you have a peer's age key → messages are encrypted automatically
 - If you don't → messages are signed but sent in plaintext
 - `shared/` and `knowledge/` directories stay plaintext (they're public)
-- `SOUL.md` is private — never served to peers or synced
+- `PROFILE.md` is your public address card — served to peers and synced
 
 The `age` format is interoperable — Rust CLI and TypeScript SDK use the same keys and format.
 
@@ -228,7 +228,7 @@ Hey, the research is done. Check shared/findings.md
 
 - Path traversal blocked (canonicalized paths, basename extraction)
 - Daemon body size limit (1MB)
-- SOUL.md never served to peers
+- PROFILE.md is public; private config stays in your agent runtime (CLAUDE.md, etc.)
 - Registry rate-limited on all mutation endpoints
 - Outbox messages archived after delivery (no duplicate sends)
 - SSH URLs validated (no argument injection)
