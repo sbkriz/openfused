@@ -3,7 +3,7 @@
 import { Command } from "commander";
 import { nanoid } from "nanoid";
 import { ContextStore } from "./store.js";
-import { watchInbox, watchContext } from "./watch.js";
+import { watchInbox, watchContext, watchSync } from "./watch.js";
 import { syncAll, syncOne } from "./sync.js";
 import * as registry from "./registry.js";
 import { fingerprint } from "./crypto.js";
@@ -139,8 +139,9 @@ inbox
 // --- watch ---
 program
   .command("watch")
-  .description("Watch for inbox messages and context changes")
+  .description("Watch for inbox messages, context changes, and sync with peers")
   .option("-d, --dir <path>", "Context store directory", ".")
+  .option("--sync-interval <seconds>", "Peer sync interval in seconds (0 to disable)", "60")
   .action(async (opts) => {
     const store = new ContextStore(resolve(opts.dir));
     if (!(await store.exists())) {
@@ -148,15 +149,39 @@ program
       process.exit(1);
     }
     const config = await store.readConfig();
+    const interval = parseInt(opts.syncInterval) * 1000;
+
     console.log(`Watching context store: ${config.name} (${config.id})`);
+    if (config.peers.length > 0 && interval > 0) {
+      console.log(`Syncing with ${config.peers.length} peer(s) every ${opts.syncInterval}s`);
+    }
     console.log(`Press Ctrl+C to stop.\n`);
+
     watchInbox(store.root, (from, message) => {
       console.log(`\n[inbox] New message from ${from}:`);
       console.log(message);
     });
+
     watchContext(store.root, () => {
       console.log(`\n[context] CONTEXT.md updated`);
     });
+
+    if (config.peers.length > 0 && interval > 0) {
+      watchSync(
+        store,
+        interval,
+        (peer, pulled, pushed) => {
+          const parts: string[] = [];
+          if (pulled.length) parts.push(`pulled ${pulled.length} files`);
+          if (pushed.length) parts.push(`pushed ${pushed.length} messages`);
+          console.log(`\n[sync] ${peer}: ${parts.join(", ")}`);
+        },
+        (peer, errors) => {
+          for (const e of errors) console.error(`\n[sync] ${peer}: ${e}`);
+        },
+      );
+    }
+
     await new Promise(() => {});
   });
 
