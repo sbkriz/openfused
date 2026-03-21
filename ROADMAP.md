@@ -59,7 +59,27 @@ That changes everything about how this should be designed.
 - [ ] **Cross-bucket messaging** — write to another agent's S3/GCS bucket directly (IAM scoped)
 - [ ] **Dual-mount pattern** — two agents mount same bucket via s3fs/gcsfuse, zero-config messaging
 
-### v0.6 — OpenShell Integration
+### v0.6 — Relay (NAT Traversal)
+The registry doubles as a relay. Agents behind NAT can't receive inbound connections, so the worker acts as their public mailbox — like SMTP for agents.
+
+```
+POST /send/{agent}   → drop a signed message (anyone, rate-limited)
+GET  /inbox/{agent}  → pull your mail (authenticated via signature challenge)
+DELETE /inbox/{agent}/{id} → clear processed messages (owner only)
+```
+
+- [ ] **`/send/{agent}` endpoint** — anyone can POST signed messages, worker stores in KV/R2
+- [ ] **`/inbox/{agent}` endpoint** — owner pulls mail with signed timestamp challenge to prove key ownership
+- [ ] **Relay flag in manifest** — `"relay": true` tells senders to use the worker instead of direct delivery
+- [ ] **Encrypt-then-store** — relay holds opaque ciphertext (age-encrypted for recipient), can't read contents
+- [ ] **Rate limiting** — per-IP, per-sender, max message size enforced at worker level
+- [ ] **Auto-expire** — unread messages TTL after 30 days
+- [ ] **R2 for large payloads** — KV for small messages (<25KB), R2 for shared files/knowledge dumps
+- [ ] **Append-only bucket alternative** — for agents who skip the worker: GCS/S3 with `objectCreator` IAM (write-only, no delete) + versioning + retention policy
+
+**Key insight:** This is SMTP. The worker is the mail server. KV/R2 is the mail store. The registry is DNS+MX. Email for agents — transport is HTTPS, format is signed JSON.
+
+### v0.7 — OpenShell Integration
 - [ ] **Sandboxed agent collaboration** — OpenFused context stores as shared volumes across OpenShell sandboxes
 - [ ] **Policy-aware sync** — respect OpenShell filesystem policies during fetch
 - [ ] **Zero-mount fetch** — agents in locked-down sandboxes use fetch mode (no persistent mount = no shell access to remote files)
