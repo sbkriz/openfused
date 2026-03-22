@@ -14,6 +14,16 @@ import { parseValiditySections, buildValidityReport } from "./validity.js";
 import { createRequire } from "node:module";
 const VERSION = createRequire(import.meta.url)("../package.json").version;
 
+// Enable proxy support: Node.js built-in fetch doesn't respect HTTP_PROXY env vars.
+// Setting a global EnvHttpProxyAgent makes all fetch() calls proxy-aware —
+// essential for corporate networks, containers, and tunneled environments.
+if (process.env.https_proxy || process.env.HTTPS_PROXY || process.env.http_proxy || process.env.HTTP_PROXY) {
+  try {
+    const { EnvHttpProxyAgent, setGlobalDispatcher } = await import("undici");
+    setGlobalDispatcher(new EnvHttpProxyAgent());
+  } catch {}
+}
+
 const program = new Command();
 
 program
