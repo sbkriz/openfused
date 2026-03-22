@@ -80,7 +80,8 @@ program
     } else if (opts.append) {
       const existing = await store.readContext();
       const text = opts.append.replace(/\\n/g, "\n");
-      await store.writeContext(existing + "\n" + text);
+      const timestamp = `<!-- openfuse:added: ${new Date().toISOString()} -->`;
+      await store.writeContext(existing + "\n" + timestamp + "\n" + text);
       console.log("Context appended.");
     } else {
       console.log(await store.readContext());
@@ -245,6 +246,21 @@ program
     }
 
     await new Promise(() => {});
+  });
+
+// --- compact ---
+program
+  .command("compact")
+  .description("Move [DONE] sections from CONTEXT.md to history/")
+  .option("-d, --dir <path>", "Context store directory", ".")
+  .action(async (opts) => {
+    const store = new ContextStore(resolve(opts.dir));
+    const { moved, kept } = await store.compactContext();
+    if (moved === 0) {
+      console.log("Nothing to compact. Mark sections with [DONE] to archive them.");
+    } else {
+      console.log(`Compacted: ${moved} done, ${kept} kept.`);
+    }
   });
 
 // --- share ---

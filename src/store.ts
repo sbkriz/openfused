@@ -12,7 +12,7 @@
 //   .mesh.json  — config, peer list, keyring
 // No database, no daemon required. `ls` is your status command.
 
-import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir, appendFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { existsSync } from "node:fs";
 import {
@@ -126,6 +126,54 @@ export class ContextStore {
 
   async writeContext(content: string): Promise<void> {
     await writeFile(join(this.root, "CONTEXT.md"), content);
+  }
+
+  // --- Context compaction ---
+  // Agents mark sections as [DONE] when work is complete. `openfuse compact`
+  // moves done sections to history/YYYY-MM-DD.md, keeping CONTEXT.md lean.
+  // Sections are delimited by markdown headers (## or ###).
+
+  async compactContext(): Promise<{ moved: number; kept: number }> {
+    const content = await this.readContext();
+    const lines = content.split("\n");
+    const kept: string[] = [];
+    const done: string[] = [];
+    let current: string[] = [];
+    let currentDone = false;
+
+    const flush = () => {
+      if (current.length > 0) {
+        (currentDone ? done : kept).push(current.join("\n"));
+        current = [];
+        currentDone = false;
+      }
+    };
+
+    for (const line of lines) {
+      if (/^#{1,3}\s/.test(line)) {
+        flush();
+        currentDone = /\[DONE\]/i.test(line);
+      }
+      current.push(line);
+    }
+    flush();
+
+    if (done.length === 0) return { moved: 0, kept: kept.length };
+
+    // Write kept sections back to CONTEXT.md
+    await this.writeContext(
+      kept.join("\n\n") || "# Context\n\n*Working memory — what's happening right now.*\n"
+    );
+
+    // Append done sections to history/YYYY-MM-DD.md
+    const historyDir = join(this.root, "history");
+    await mkdir(historyDir, { recursive: true });
+    const dateStr = new Date().toISOString().split("T")[0];
+    const historyFile = join(historyDir, `${dateStr}.md`);
+    const header = existsSync(historyFile) ? "\n---\n\n" : `# Context History — ${dateStr}\n\n`;
+    await appendFile(historyFile, header + done.join("\n\n") + "\n");
+
+    return { moved: done.length, kept: kept.length };
   }
 
   async readProfile(): Promise<string> {
