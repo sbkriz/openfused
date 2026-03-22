@@ -3,15 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0a0a0a">
   <title>OpenFused — The File Protocol for AI Agent Context</title>
   <meta name="description" content="The file protocol for AI agent context. Encrypted, signed, peer-to-peer. Ed25519 signed, age encrypted, DNS-based discovery.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
   <style>
-    :root { --bg: #0a0a0a; --fg: #e0e0e0; --accent: #4fc3f7; --dim: #666; --border: #222; --code-bg: #111; }
+    :root { --bg: #0a0a0a; --fg: #e0e0e0; --accent: #4fc3f7; --dim: #999; --border: #222; --code-bg: #111; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', monospace; background: var(--bg); color: var(--fg); line-height: 1.6; }
+    html { background-color: #0a0a0a; }
+    body { font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', monospace; background: var(--bg); color: var(--fg); line-height: 1.6; -webkit-text-fill-color: var(--fg); }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
 
@@ -21,7 +24,7 @@
     header h1 { font-size: 2.5rem; letter-spacing: -1px; }
     header h1 span { color: var(--accent); }
     header .tagline { color: var(--dim); margin-top: 0.5rem; font-size: 1.1rem; }
-    header .sub { color: #444; margin-top: 0.8rem; font-size: 0.9rem; font-style: italic; }
+    header .sub { color: var(--dim); margin-top: 0.8rem; font-size: 0.9rem; font-style: italic; }
 
     .install { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 2rem 0; }
     .install code { color: var(--accent); }
@@ -53,7 +56,7 @@
     .store { font-size: 0.85rem; color: var(--dim); }
     .store span { color: var(--fg); }
 
-    .philosophy { border-left: 3px solid var(--accent); padding-left: 1.2rem; margin: 2rem 0; color: #555; font-style: italic; font-size: 0.9rem; }
+    .philosophy { border-left: 3px solid var(--accent); padding-left: 1.2rem; margin: 2rem 0; color: #888; font-style: italic; font-size: 0.9rem; }
 
     footer { border-top: 1px solid var(--border); margin-top: 4rem; padding: 2rem 0; text-align: center; color: var(--dim); font-size: 0.8rem; }
     footer a { color: var(--dim); }
@@ -245,7 +248,7 @@ docker compose up
 
     <footer>
       <p>MIT &middot; <a href="https://github.com/wearethecompute">wearethecompute</a></p>
-      <p style="margin-top: 0.5rem; color: #333;">The protocol is files.</p>
+      <p style="margin-top: 0.5rem; color: #777;">The protocol is files.</p>
     </footer>
   </div>
 
