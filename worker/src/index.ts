@@ -304,10 +304,12 @@ async function deleteDnsTxt(env: Env, name: string): Promise<void> {
 }
 
 function parseTxt(txt: string): Record<string, string> {
+  // Strip surrounding quotes — DNS API wraps TXT values in double quotes
+  const clean = txt.replace(/^"+|"+$/g, "");
   const fields: Record<string, string> = {};
-  for (const part of txt.split(" ")) {
+  for (const part of clean.split(" ")) {
     const eq = part.indexOf("=");
-    if (eq > 0) fields[part.slice(0, eq)] = part.slice(eq + 1);
+    if (eq > 0) fields[part.slice(0, eq)] = part.slice(eq + 1).replace(/"/g, "");
   }
   return fields;
 }
