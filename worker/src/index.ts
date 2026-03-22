@@ -1,6 +1,6 @@
 /**
  * OpenFuse Registry — DNS management API for agent discovery.
- * Creates DNS TXT records at _openfuse.{name}.openfused.dev on registration.
+ * Creates DNS TXT records at _openfuse.{name}.openfused.net on registration.
  * Reads go through DNS directly — no Worker needed for discovery.
  * R2 is optional future social profile layer (not protocol).
  */
@@ -8,8 +8,8 @@
 interface Env {
   REGISTRY: R2Bucket;     // Future: social profiles, not protocol
   CF_DNS_TOKEN: string;   // API token with DNS write perms
-  CF_ZONE_ID: string;     // openfused.dev zone ID
-  DNS_DOMAIN: string;     // "openfused.dev"
+  CF_ZONE_ID: string;     // openfused.net zone ID
+  DNS_DOMAIN: string;     // "openfused.net"
 }
 
 interface RegisterRequest {
@@ -40,7 +40,7 @@ export default {
           latest: "0.3.4",
           dns: `*.${env.DNS_DOMAIN}`,
           changelog: "https://github.com/wearethecompute/openfused/releases",
-          discovery: "dig TXT _openfuse.{name}.openfused.dev",
+          discovery: "dig TXT _openfuse.{name}.openfused.net",
         });
       }
 

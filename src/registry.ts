@@ -70,13 +70,13 @@ export async function register(store: ContextStore, endpoint: string, registry: 
 // Discovery: try DNS TXT first (decentralized, no registry needed), fall back to Worker API.
 // DNS format: v=of1 e={endpoint} pk={pubkey} ek={agekey} fp={fingerprint}
 // Self-hosted: _openfuse.{name}.{their-domain} — user manages their own TXT records.
-// Our zone: _openfuse.{name}.openfused.dev — managed by the registry Worker on registration.
+// Our zone: _openfuse.{name}.openfused.net — managed by the registry Worker on registration.
 export async function discover(name: string, registry: string): Promise<Manifest> {
   // If name contains a dot, it's a domain — try DNS TXT directly
-  // Otherwise try DNS at openfused.dev, then fall back to registry API
+  // Otherwise try DNS at openfused.net, then fall back to registry API
   const dnsNames = name.includes(".")
     ? [`_openfuse.${name}`]
-    : [`_openfuse.${name}.openfused.dev`];
+    : [`_openfuse.${name}.openfused.net`];
 
   for (const dnsName of dnsNames) {
     const manifest = await discoverViaDns(dnsName, name);
