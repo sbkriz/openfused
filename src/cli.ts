@@ -610,6 +610,9 @@ program
     console.log(`  Fingerprint: ${manifest.fingerprint}`);
     console.log(`  DNS:         _openfuse.${manifest.name}`);
     console.log(`  Registry:    ${reg}`);
+    console.log(`\nOthers can find you with:`);
+    console.log(`  openfuse discover ${manifest.name}`);
+    console.log(`  openfuse send ${manifest.name} "hello"`);
   });
 
 // --- discover ---
