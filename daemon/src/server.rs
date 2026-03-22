@@ -100,10 +100,17 @@ async fn read_file(
 /// Serve outbox messages addressed to a specific agent.
 /// This lets remote agents poll for replies without needing SSH access.
 /// Only returns messages matching _to-{name}.json — you can't read other agents' mail.
+///
+/// Unauthenticated by design: the caller proves nothing about their identity.
+/// Privacy relies on encryption — plaintext broadcasts (_to-all) are exposed to anyone
+/// who can reach this endpoint. Safe because messages SHOULD be age-encrypted for the
+/// recipient; if they aren't, the sender accepted the risk.
 async fn get_outbox(
     State(store): State<Arc<ContextStore>>,
     Path(name): Path<String>,
 ) -> Json<Vec<serde_json::Value>> {
+    // Strip everything except safe chars to prevent path traversal via the URL parameter.
+    // The suffix match below further constrains which files are returned.
     let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "");
     let outbox_dir = store.root.join("outbox");
     let mut messages = vec![];
@@ -165,6 +172,10 @@ async fn receive_inbox(
 }
 
 /// Verify Ed25519 signature: payload = "{from}\n{timestamp}\n{message}"
+/// This only proves the message was signed by the holder of this key — NOT that the key
+/// belongs to who they claim to be. Identity binding happens later when the recipient
+/// checks the key against their trusted keyring. We verify here to reject garbage/spam
+/// at the network edge before it hits disk.
 fn verify_signature(from: &str, timestamp: &str, message: &str, sig_b64: &str, pubkey_hex: &str) -> bool {
     let Ok(key_bytes) = hex::decode(pubkey_hex.trim()) else { return false };
     let Ok(arr): Result<[u8; 32], _> = key_bytes.try_into() else { return false };

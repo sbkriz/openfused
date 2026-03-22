@@ -179,7 +179,10 @@ async function syncHttp(
     }
   }
 
-  // Pull peer's outbox for messages addressed to us (HTTP version)
+  // Pull peer's outbox for messages addressed to us (HTTP version).
+  // The peer's daemon filters to _to-{myName}.json, but the JSON body is untrusted —
+  // a malicious peer controls every field. We must sanitize before using any value
+  // in a filename to prevent path traversal (e.g. from="../../.keys/evil").
   const config = await store.readConfig();
   const myName = config.name;
   const inboxDir = join(store.root, "inbox");
@@ -191,7 +194,11 @@ async function syncHttp(
       for (const msg of messages) {
         const ts = (msg.timestamp || new Date().toISOString()).replace(/[:.]/g, "-");
         const from = msg.from || "unknown";
-        const fname = `${ts}_from-${from}_to-${myName}.json`;
+        // SECURITY: sanitize remote-controlled values before constructing local filenames.
+        // Without this, a malicious "from" like "../../.keys/x" could write outside inbox/.
+        const safeFrom = from.replace(/[^a-zA-Z0-9\-_]/g, "");
+        const safeTs = ts.replace(/[^a-zA-Z0-9\-_]/g, "");
+        const fname = `${safeTs}_from-${safeFrom}_to-${myName}.json`;
         const dest = join(inboxDir, fname);
         if (!existsSync(dest)) {
           await writeFile(dest, JSON.stringify(msg, null, 2));

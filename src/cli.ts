@@ -580,7 +580,12 @@ program
     try {
       const manifest = await registry.discover(name, reg);
 
-      // Auto-import key + add as peer so `openfuse sync` works for replies
+      // Auto-import key (untrusted) + add as peer so future `openfuse sync` can
+      // deliver replies and pull context. Key is deliberately NOT trusted — the user
+      // must explicitly `openfuse key trust <name>` after out-of-band verification.
+      // NOTE: manifest data comes from the registry and is attacker-controlled.
+      // The endpoint URL is stored as-is; a malicious entry could point at an internal
+      // service. Sync will pull from it — consider validating URL scheme/host.
       let config = await store.readConfig();
       if (!config.keyring.some((e) => e.signingKey === manifest.publicKey)) {
         config.keyring.push({

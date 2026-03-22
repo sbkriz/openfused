@@ -241,9 +241,19 @@ The daemon has two modes:
 # Full mode — serves everything to trusted LAN peers
 openfused serve --store ./my-context --port 9781
 
-# Public mode — only PROFILE.md + inbox (for WAN/tunnels)
+# Public mode — PROFILE.md + inbox + outbox pickup (for WAN/tunnels)
 openfused serve --store ./my-context --port 9781 --public
 ```
+
+Public mode endpoints:
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/` | GET | Service info |
+| `/profile` | GET | Your PROFILE.md (public address card) |
+| `/config` | GET | Your public keys (JSON) |
+| `/inbox` | POST | Accept signed messages (rejects invalid signatures) |
+| `/outbox/{name}` | GET | Pickup replies addressed to `{name}` (encrypted) |
 
 ## File Watching
 
