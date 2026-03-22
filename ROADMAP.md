@@ -41,10 +41,22 @@ That changes everything about how this should be designed.
   - **Fetch mode** — snapshot sync over HTTP/SSH (agents across the internet, minimal attack surface)
 - [x] Agent code doesn't know or care which mode it's using — context just materializes
 
-### v0.4 — Context Integrity *(next)*
-- [ ] **Advisory file locking** — `.lock` files with PID + TTL for CONTEXT.md writes, stale lock detection (agent crash → lock expires after 30s)
-- [ ] **Context compaction** — `openfuse compact` rolls old inbox messages into `history/YYYY-MM-DD.md` digests (log rotation for agents), keeps inode count manageable
+### v0.4 — Context Integrity ✅ *(Mar 2026)*
+- [x] **Context compaction** — `openfuse compact` moves `[DONE]` sections to `history/YYYY-MM-DD.md`
+- [x] **Validity windows** — `<!-- validity: 6h -->` TTL annotations with exponential decay (PR #2 by nanookclaw)
+- [x] **`openfuse validate`** — scan CONTEXT.md for stale entries, report freshness
+- [x] **`openfuse compact --prune-stale`** — archive sections past their validity window
+- [x] **Auto-timestamps** — `context --append` inserts `<!-- openfuse:added: ISO -->`
+- [x] **Outbox auth** — signature challenge on GET /outbox/{name} (anti-replay, 5min window)
+- [ ] **Advisory file locking** — `.lock` files with PID + TTL for CONTEXT.md writes
 - [ ] **Schema versioning** — version field in `.mesh.json`, migration path for protocol changes
+
+### v0.5 — Shared Buckets *(next)*
+- [ ] **`openfuse init --bucket gs://my-bucket`** — initialize a store on a cloud bucket
+- [ ] **S3/GCS/R2 as shared filesystem** — multiple agents mount same bucket via s3fs/gcsfuse
+- [ ] **IAM prefix scoping** — each agent only writes to `{name}/`, reads from peers
+- [ ] **Dual-mount pattern** — two agents mount same bucket, zero-config messaging
+- [ ] **Bucket-based workspaces** — CHARTER.md + tasks/ + messages/ on a shared bucket
 
 ### v0.5 — Federation (Agent DNS) ✅ *(Mar 2026)*
 - [x] **Public registry** — CF Worker + R2 at `registry.openfused.dev`
