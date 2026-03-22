@@ -7,7 +7,8 @@ binding = "REGISTRY"
 bucket_name = "openfuse-registry"
 
 routes = [
-  { pattern = "registry.openfused.dev", custom_domain = true }
+  { pattern = "registry.openfused.dev", custom_domain = true },
+  { pattern = "registry.openfused.net", custom_domain = true }
 ]
 
 [vars]
