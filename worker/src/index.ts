@@ -34,10 +34,21 @@ export default {
     try {
       // GET / — service info + latest version
       if (path === "/" && request.method === "GET") {
+        // Fetch latest version from npm instead of hardcoding
+        let latest = "0.3.13"; // fallback
+        try {
+          const npm = await fetch("https://registry.npmjs.org/openfused/latest", {
+            signal: AbortSignal.timeout(2000),
+          });
+          if (npm.ok) {
+            const data = await npm.json() as { version?: string };
+            if (data.version) latest = data.version;
+          }
+        } catch {}
         return json({
           service: "openfuse-registry",
           version: "0.4.0",
-          latest: "0.3.13",
+          latest,
           dns: `*.${env.DNS_DOMAIN}`,
           changelog: "https://github.com/openfused/openfused/releases",
           discovery: "dig TXT _openfuse.{name}.openfused.net",
