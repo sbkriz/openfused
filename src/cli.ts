@@ -7,10 +7,10 @@ import { watchInbox, watchContext, watchSync } from "./watch.js";
 import { syncAll, syncOne, deliverOne } from "./sync.js";
 import * as registry from "./registry.js";
 import { fingerprint } from "./crypto.js";
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
 import { readFile } from "node:fs/promises";
 
-const VERSION = "0.3.7";
+const VERSION = "0.3.8";
 
 const program = new Command();
 
@@ -597,12 +597,42 @@ program
         console.log(`  Run \`openfuse key trust ${manifest.name}\` to trust`);
       }
 
-      await store.sendInbox(name, message);
-      console.log(`Message queued in outbox for ${name}. Run \`openfuse sync\` to deliver.`);
+      const filename = await store.sendInbox(name, message);
+
+      // Try direct HTTP delivery if endpoint is http(s)
+      if (manifest.endpoint.startsWith("http")) {
+        try {
+          const body = await readFile(join(store.root, "outbox", filename), "utf-8");
+          const r = await fetch(`${manifest.endpoint.replace(/\/$/, "")}/inbox`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body,
+          });
+          if (r.ok) {
+            // Archive to .sent/
+            const { mkdir, rename } = await import("node:fs/promises");
+            const sentDir = join(store.root, "outbox", ".sent");
+            await mkdir(sentDir, { recursive: true });
+            await rename(join(store.root, "outbox", filename), join(sentDir, filename));
+            console.log(`Delivered to ${name}.`);
+          } else {
+            console.log(`Queued for ${name}. Endpoint returned ${r.status}. Will deliver on next sync.`);
+          }
+        } catch {
+          console.log(`Queued for ${name}. Will deliver on next sync.`);
+        }
+      } else {
+        console.log(`Queued for ${name}. Run \`openfuse sync\` to deliver.`);
+      }
     } catch {
       // Not in registry — send as a peer message
-      await store.sendInbox(name, message);
-      console.log(`Message sent to ${name}'s outbox.`);
+      const filename = await store.sendInbox(name, message);
+      const delivered = await deliverOne(store, name, filename);
+      if (delivered) {
+        console.log(`Delivered to ${name}.`);
+      } else {
+        console.log(`Queued for ${name}. Run \`openfuse sync\` to deliver.`);
+      }
     }
   });
 
