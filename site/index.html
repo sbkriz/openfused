@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
   <style>
-    :root { --bg: #0a0a0a; --fg: #e0e0e0; --accent: #4fc3f7; --dim: #999; --border: #222; --code-bg: #111; }
+    :root { --bg: #0a0a0a; --fg: #e0e0e0; --accent: #4fc3f7; --dim: #b0b0b0; --border: #222; --code-bg: #111; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html { background-color: #0a0a0a; }
     body { font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', monospace; background: var(--bg) !important; color: var(--fg) !important; line-height: 1.6; }
@@ -33,12 +33,12 @@
 
     section { margin: 3rem 0; }
     section h2 { font-size: 1.3rem; margin-bottom: 1rem; color: var(--accent) !important; }
-    section p { color: var(--dim) !important; margin-bottom: 1rem; }
+    section p { color: var(--fg) !important; margin-bottom: 1rem; }
 
     .features { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin: 2rem 0; }
     .feature { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem; }
     .feature h3 { font-size: 0.95rem; margin-bottom: 0.5rem; color: var(--fg) !important; }
-    .feature p { font-size: 0.85rem; color: var(--dim) !important; margin: 0; }
+    .feature p { font-size: 0.85rem; color: var(--fg) !important; margin: 0; }
     @media (max-width: 600px) { .features { grid-template-columns: 1fr; } }
 
     .demo { background: var(--code-bg); border: 2px solid var(--accent); border-radius: 8px; padding: 1.5rem; margin: 2rem 0; }
@@ -54,7 +54,7 @@
     .discover button:hover { opacity: 0.85; }
     #discover-result { margin-top: 1rem; font-size: 0.85rem; white-space: pre-wrap; color: var(--dim); }
 
-    .store { font-size: 0.85rem; color: var(--dim) !important; }
+    .store { font-size: 0.85rem; color: var(--fg) !important; }
     .store span { color: var(--fg) !important; }
 
     .philosophy { border-left: 3px solid var(--accent); padding-left: 1.2rem; margin: 2rem 0; color: #888 !important; font-style: italic; font-size: 0.9rem; }
