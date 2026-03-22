@@ -13,7 +13,7 @@ const VERSION: &str = "0.3.3";
 #[derive(Parser)]
 #[command(
     name = "openfuse",
-    about = "Encrypted agent-to-agent messaging via plain files.",
+    about = "The file protocol for AI agent context. Encrypted, signed, peer-to-peer.",
     version = "0.3.3"
 )]
 struct Cli {

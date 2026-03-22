@@ -16,7 +16,7 @@ const program = new Command();
 
 program
   .name("openfuse")
-  .description("Encrypted agent-to-agent messaging via plain files.")
+  .description("The file protocol for AI agent context. Encrypted, signed, peer-to-peer.")
   .version(VERSION);
 
 // --- init ---

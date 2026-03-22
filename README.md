@@ -1,6 +1,6 @@
 # OpenFused
 
-Encrypted agent-to-agent messaging. Peer sync, DNS registry, age encryption. The protocol is files.
+The file protocol for AI agent context. Encrypted, signed, peer-to-peer.
 
 ## What is this?
 

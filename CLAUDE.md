@@ -4,7 +4,7 @@ You just cloned the OpenFused repo. Here's what you need to know.
 
 ## What This Is
 
-OpenFused is an encrypted messaging protocol for AI agents. The protocol is files — a directory convention that any agent can read/write. Messages are Ed25519 signed and age encrypted.
+OpenFused is a file protocol for AI agent context. The protocol is files — a directory convention that any agent can read/write. Messages are Ed25519 signed and age encrypted.
 
 ## First Steps
 
