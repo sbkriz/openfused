@@ -232,15 +232,33 @@ async function syncHttp(
       for (const msg of messages) {
         const ts = (msg.timestamp || new Date().toISOString()).replace(/[:.]/g, "-");
         const from = msg.from || "unknown";
-        // SECURITY: sanitize remote-controlled values before constructing local filenames.
-        // Without this, a malicious "from" like "../../.keys/x" could write outside inbox/.
         const safeFrom = from.replace(/[^a-zA-Z0-9\-_]/g, "");
         const safeTs = ts.replace(/[^a-zA-Z0-9\-_]/g, "");
         const fname = `${safeTs}_from-${safeFrom}_to-${myName}.json`;
+        const outboxFile = msg._outboxFile; // filename on sender's outbox
         const dest = join(inboxDir, fname);
         if (!existsSync(dest)) {
-          await writeFile(dest, JSON.stringify(msg, null, 2));
+          // Strip the _outboxFile metadata before saving
+          const { _outboxFile, ...cleanMsg } = msg;
+          await writeFile(dest, JSON.stringify(cleanMsg, null, 2));
           pulled.push(`outbox→${fname}`);
+
+          // ACK: tell sender to move this message to .sent/
+          if (outboxFile) {
+            try {
+              const ackTs = new Date().toISOString();
+              const ackChallenge = `ACK:${myName}:${outboxFile}:${ackTs}`;
+              const ackSig = await signChallenge(store.root, ackChallenge);
+              await fetch(`${baseUrl}/outbox/${myName}/${outboxFile}`, {
+                method: "DELETE",
+                headers: {
+                  "X-OpenFuse-PublicKey": ackSig.publicKey,
+                  "X-OpenFuse-Signature": ackSig.signature,
+                  "X-OpenFuse-Timestamp": ackTs,
+                },
+              });
+            } catch {} // best-effort ACK
+          }
         }
       }
     }

@@ -2,7 +2,7 @@ use axum::{
     extract::{DefaultBodyLimit, Path, State},
     http::StatusCode,
     response::Json,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -25,7 +25,8 @@ pub async fn serve(store_path: PathBuf, bind: &str, port: u16, public: bool) {
         .route("/config", get(get_config))
         .route("/profile", get(get_profile))
         .route("/inbox", post(receive_inbox))
-        .route("/outbox/{name}", get(get_outbox));
+        .route("/outbox/{name}", get(get_outbox))
+        .route("/outbox/{name}/{filename}", delete(ack_outbox));
 
     if public {
         tracing::info!("Public mode: serving PROFILE.md + inbox only");
@@ -179,7 +180,7 @@ async fn get_outbox(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    // Collect messages addressed to this name
+    // Collect messages addressed to this name, include filename for ACK
     let outbox_dir = store.root.join("outbox");
     let mut messages = vec![];
 
@@ -189,7 +190,9 @@ async fn get_outbox(
             if !fname.ends_with(".json") { continue; }
             if !fname.contains(&format!("_to-{}.json", safe_name)) { continue; }
             if let Ok(content) = tokio::fs::read_to_string(entry.path()).await {
-                if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Ok(mut msg) = serde_json::from_str::<serde_json::Value>(&content) {
+                    // Include filename so client can ACK (DELETE /outbox/{name}/{filename})
+                    msg["_outboxFile"] = serde_json::Value::String(fname);
                     messages.push(msg);
                 }
             }
@@ -197,6 +200,57 @@ async fn get_outbox(
     }
 
     Ok(Json(messages))
+}
+
+/// ACK a received outbox message — moves it to outbox/.sent/ so it won't be
+/// served again. Same signature auth as GET /outbox/{name}. The recipient calls
+/// this after successfully processing each message to prevent duplicate delivery.
+async fn ack_outbox(
+    State(store): State<Arc<ContextStore>>,
+    Path((name, filename)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
+) -> Result<StatusCode, StatusCode> {
+    let safe_name = name.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "");
+    let safe_file = filename.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.', "");
+
+    // Same auth as GET /outbox — verify requester owns this name
+    let pubkey_hex = headers.get("x-openfuse-publickey")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let sig_b64 = headers.get("x-openfuse-signature")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let timestamp = headers.get("x-openfuse-timestamp")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(timestamp) {
+        let age = chrono::Utc::now().signed_duration_since(ts);
+        if age.num_seconds().abs() > 300 {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+    } else {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let challenge = format!("ACK:{}:{}:{}", safe_name, safe_file, timestamp);
+    if !verify_signature(&safe_name, timestamp, &challenge, sig_b64, pubkey_hex) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    // Move to .sent/
+    let outbox_dir = store.root.join("outbox");
+    let src = outbox_dir.join(&safe_file);
+    if !src.exists() || !safe_file.contains(&format!("_to-{}.json", safe_name)) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    let sent_dir = outbox_dir.join(".sent");
+    tokio::fs::create_dir_all(&sent_dir).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    tokio::fs::rename(&src, sent_dir.join(&safe_file)).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    tracing::info!("ACK'd outbox message: {} (moved to .sent/)", safe_file);
+    Ok(StatusCode::OK)
 }
 
 /// Receive a signed message into the inbox.
