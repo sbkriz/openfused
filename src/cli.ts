@@ -16,7 +16,7 @@ const program = new Command();
 
 program
   .name("openfuse")
-  .description("Decentralized context mesh for AI agents. The protocol is files.")
+  .description("Encrypted agent-to-agent messaging via plain files.")
   .version(VERSION);
 
 // --- init ---

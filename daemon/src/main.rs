@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use tracing_subscriber;
 
 #[derive(Parser)]
-#[command(name = "openfused", about = "FUSE daemon for decentralized AI agent context mesh")]
+#[command(name = "openfused", about = "FUSE daemon for OpenFused agent messaging")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

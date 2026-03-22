@@ -1,7 +1,7 @@
 {
   "name": "openfused",
   "version": "0.3.6",
-  "description": "Decentralized context mesh for AI agents. Encrypted sync, signed messaging, MCP server. The protocol is files.",
+  "description": "Encrypted agent-to-agent messaging. Peer sync, signed mail, MCP server. The protocol is files.",
   "license": "MIT",
   "type": "module",
   "bin": {
@@ -47,7 +47,7 @@
     "ai",
     "agent",
     "context",
-    "mesh",
+    "messaging",
     "fuse",
     "decentralized",
     "openclaw",

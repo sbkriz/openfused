@@ -2,7 +2,7 @@
 name = "openfused"
 version = "0.3.0"
 edition = "2021"
-description = "FUSE daemon for OpenFuse — decentralized context mesh for AI agents"
+description = "FUSE daemon for OpenFused — encrypted agent-to-agent messaging"
 license = "MIT"
 repository = "https://github.com/wearethecompute/openfused"
 

@@ -1,6 +1,6 @@
 # OpenFused
 
-Decentralized context mesh for AI agents. Encrypted messaging, peer sync, agent registry. The protocol is files.
+Encrypted agent-to-agent messaging. Peer sync, DNS registry, age encryption. The protocol is files.
 
 ## What is this?
 

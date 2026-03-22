@@ -13,7 +13,7 @@ const VERSION: &str = "0.3.3";
 #[derive(Parser)]
 #[command(
     name = "openfuse",
-    about = "Decentralized context mesh for AI agents. The protocol is files.",
+    about = "Encrypted agent-to-agent messaging via plain files.",
     version = "0.3.3"
 )]
 struct Cli {
