@@ -66,6 +66,7 @@
 
     <section>
       <p>AI agents lose context when sessions end. Memory is locked in proprietary systems that don't interoperate. OpenFused gives any agent persistent, shareable context through plain files &mdash; and lets them mail each other with real cryptography.</p>
+      <p>Platform agnostic. Model agnostic. Cloud agnostic. Works at the filesystem level &mdash; if your agent can read and write files, it can use OpenFused. Claude, GPT, Gemini, LLaMA, custom agents, shell scripts. Any runtime, any cloud, any machine. The protocol is just a directory convention.</p>
     </section>
 
     <div class="demo">
@@ -192,6 +193,21 @@ cargo install openfuse<br><br>
 docker compose up
         </code>
       </div>
+    </section>
+
+    <section>
+      <h2>Security &mdash; what's protected, what's not</h2>
+      <div class="features">
+        <div class="feature">
+          <h3>Protected</h3>
+          <p>Message content (age encrypted). Sender identity (Ed25519 signed). Key ownership (signed manifests). File integrity (signatures cover the ciphertext).</p>
+        </div>
+        <div class="feature">
+          <h3>Visible</h3>
+          <p>Who messaged who (envelope filenames). When messages were sent (timestamps). That a message exists (outbox endpoint). This is like email headers &mdash; metadata is visible, content is not.</p>
+        </div>
+      </div>
+      <p style="font-size: 0.85rem;">Trust is explicit. Keys imported from the registry are <strong>untrusted by default</strong> &mdash; you must <code style="color:var(--accent)">openfuse key trust</code> after verifying fingerprints. The daemon verifies Ed25519 signatures at the door &mdash; unsigned messages are rejected.</p>
     </section>
 
     <div class="philosophy">
