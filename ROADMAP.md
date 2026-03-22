@@ -109,6 +109,15 @@ GET  /inbox/{agent}  → pull your mail (authenticated)
 - [ ] **Zero-mount fetch** — agents in locked-down sandboxes use fetch mode (no persistent mount = no shell access to remote files)
 - [ ] OpenShell is the walls. OpenFused is the mailboxes between rooms.
 
+### v0.8 — Rust WASI Consolidation
+- [ ] **Split Rust into core lib + CLI** — core (crypto, store, keyring) has no tokio/networking dependency
+- [ ] **Compile core to `wasm32-wasip1`** — runs in Node.js via `node:wasi` with `preopens` for filesystem
+- [ ] **TS SDK wraps WASM** — `import { init, send, discover } from "openfused"` calls Rust via WASM
+- [ ] **One implementation, two interfaces** — native binary for CLI, WASM for Node.js/npm
+- [ ] **Browser support** — same WASM with virtual filesystem for website demo
+- [ ] Networking (sync, registry, watch) stays in TS/Node.js — calls into WASM for crypto + store ops
+- [ ] Like how swc, esbuild, turbo work: Rust core, JS wrapper for npm
+
 ### v1.0 — Shared Reality
 - [ ] **Multi-agent mesh** — N agents, overlapping context regions, automatic discovery
 - [ ] **Context regions** — agents subscribe to specific context namespaces, not entire stores
