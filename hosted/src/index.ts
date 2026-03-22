@@ -17,6 +17,7 @@
 
 interface Env {
   STORE: R2Bucket;
+  PLAN_LIMIT?: string; // Set via Worker binding — "1000000" for starter, "10000000" for pro
 }
 
 export default {
@@ -138,7 +139,8 @@ async function receiveInbox(env: Env, body: string): Promise<Response> {
 
   // Get our name for the envelope filename
   const configObj = await env.STORE.get(".mesh.json");
-  const ourName = configObj ? JSON.parse(await configObj.text()).name || "unknown" : "unknown";
+  const rawName = configObj ? JSON.parse(await configObj.text()).name || "unknown" : "unknown";
+  const ourName = rawName.replace(/[^a-zA-Z0-9_-]/g, "");
 
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
   const safeFrom = from.replace(/[^a-zA-Z0-9_-]/g, "");
@@ -172,6 +174,36 @@ async function getOutbox(env: Env, name: string, headers: Headers): Promise<Resp
   const valid = await verifyEd25519(challenge, sigB64, pubkeyHex);
   if (!valid) {
     return json({ error: "Invalid signature" }, 403);
+  }
+
+  // Verify the public key belongs to this agent — check if we have a message
+  // from them in our inbox with this same public key. This proves the caller
+  // is the same entity that previously messaged us (not a random keypair).
+  const inboxList = await env.STORE.list({ prefix: "inbox/" });
+  let keyKnown = false;
+  for (const obj of inboxList.objects) {
+    if (!obj.key.includes(`_from-${name}`)) continue;
+    const data = await env.STORE.get(obj.key);
+    if (data) {
+      try {
+        const msg = JSON.parse(await data.text());
+        if (msg.publicKey === pubkeyHex) { keyKnown = true; break; }
+      } catch {}
+    }
+  }
+  // Also check .mesh.json keyring for registered keys
+  if (!keyKnown) {
+    const configObj = await env.STORE.get(".mesh.json");
+    if (configObj) {
+      try {
+        const config = JSON.parse(await configObj.text());
+        const entry = (config.keyring || []).find((k: any) => k.name === name && k.signingKey === pubkeyHex);
+        if (entry) keyKnown = true;
+      } catch {}
+    }
+  }
+  if (!keyKnown) {
+    return json({ error: "Unknown public key for this agent" }, 403);
   }
 
   // List outbox files addressed to this name
@@ -226,34 +258,32 @@ function base64ToBytes(b64: string): Uint8Array {
 interface UsageData {
   count: number;
   period: string; // YYYY-MM
-  limit: number;  // 1_000_000 for starter, 10_000_000 for pro
 }
 
+// Usage limit comes from Worker env binding (set by provisioning, immutable to customer).
+// Counter stored in R2 with period key so concurrent writes at worst lose a few counts
+// (acceptable — this is metering, not billing-exact).
 async function checkUsage(env: Env): Promise<{ count: number; overLimit: boolean }> {
+  const limit = parseInt(env.PLAN_LIMIT || "1000000");
   const period = new Date().toISOString().slice(0, 7); // YYYY-MM
-  const key = "_usage/current.json";
+  const key = `_system/usage-${period}.json`; // _system/ prefix — customer knows not to touch
 
-  let usage: UsageData = { count: 0, period, limit: 1_000_000 };
-
+  let count = 0;
   const obj = await env.STORE.get(key);
   if (obj) {
     try {
       const stored = JSON.parse(await obj.text()) as UsageData;
-      if (stored.period === period) {
-        usage = stored;
-      }
-      // else: new month — reset counter, keep limit
-      if (stored.limit) usage.limit = stored.limit;
+      if (stored.period === period) count = stored.count;
     } catch {}
   }
 
-  usage.count++;
-  usage.period = period;
+  count++;
 
-  // Write updated count (best-effort, non-blocking)
-  env.STORE.put(key, JSON.stringify(usage)).catch(() => {});
+  // Best-effort write — race condition means we may undercount by a few under
+  // high concurrency. Acceptable for metering (not billing-exact).
+  env.STORE.put(key, JSON.stringify({ count, period })).catch(() => {});
 
-  return { count: usage.count, overLimit: usage.count > usage.limit };
+  return { count, overLimit: count > limit };
 }
 
 function json(data: any, status = 200): Response {

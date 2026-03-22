@@ -80,7 +80,14 @@ async function provisionMailbox(event: StripeEvent, env: ProvisionEnv): Promise<
   const name = event.data.object.metadata?.agent_name;
   if (!name) return new Response("Missing agent_name in metadata", { status: 400 });
 
-  const safeName = name.replace(/[^a-zA-Z0-9_-]/g, "");
+  const safeName = name.toLowerCase().replace(/[^a-z0-9_-]/g, "");
+
+  // Reject reserved names, empty names, and names that are too short/long
+  const RESERVED = new Set(["www", "registry", "inbox", "api", "mail", "admin", "support", "openfuse", "openfused", "app", "dashboard", "billing"]);
+  if (!safeName || safeName.length < 2 || safeName.length > 32 || RESERVED.has(safeName)) {
+    return new Response(JSON.stringify({ error: "Invalid or reserved name" }), { status: 400, headers: { "Content-Type": "application/json" } });
+  }
+
   const bucketName = `openfused-${safeName}`;
   const headers = {
     "Authorization": `Bearer ${env.CF_API_TOKEN}`,
@@ -187,7 +194,13 @@ async function verifyStripeSignature(body: string, sigHeader: string, secret: st
     const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload));
     const computed = Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-    return computed === expectedSig;
+    // Constant-time comparison — prevents timing-based signature brute-force
+    if (computed.length !== expectedSig.length) return false;
+    const a = new TextEncoder().encode(computed);
+    const b = new TextEncoder().encode(expectedSig);
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+    return diff === 0;
   } catch {
     return false;
   }
