@@ -30,6 +30,7 @@ export interface MeshConfig {
   peers: PeerConfig[];
   keyring: KeyringEntry[];
   trustedKeys?: string[]; // legacy v0.1 flat list — auto-migrated to keyring on first read
+  autoTrust?: boolean; // workspace mode: auto-trust all imported keys
 }
 
 export interface PeerConfig {
@@ -107,12 +108,15 @@ export class ContextStore {
       }
     }
 
+    // Workspaces auto-trust: all imported keys are trusted by default.
+    // Safe because workspaces are private — you control who joins.
     const config: MeshConfig = {
       id,
       name,
       created: new Date().toISOString(),
       peers: [],
       keyring: [],
+      autoTrust: true,
     };
     await this.writeConfig(config);
   }
@@ -260,9 +264,12 @@ export class ContextStore {
       const signed = deserializeSignedMessage(raw);
       if (signed) {
         const sigValid = verifyMessage(signed);
-        const trusted = config.keyring.some(
-          (k) => k.trusted && k.signingKey.trim() === signed.publicKey.trim()
-        );
+        // autoTrust (workspace mode): valid signature = verified, no explicit trust needed
+        const trusted = config.autoTrust
+          ? true
+          : config.keyring.some(
+              (k) => k.trusted && k.signingKey.trim() === signed.publicKey.trim()
+            );
         const verified = sigValid && trusted;
 
         let content: string;

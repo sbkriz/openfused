@@ -430,19 +430,24 @@ key
       return;
     }
 
+    const autoTrust = config.autoTrust ?? false;
     config.keyring.push({
       name,
       address: opts.address ?? "",
       signingKey,
       encryptionKey: opts.encryptionKey,
       fingerprint: fp,
-      trusted: false,
+      trusted: autoTrust,
       added: new Date().toISOString(),
     });
     await store.writeConfig(config);
     console.log(`Imported key for: ${name}`);
     console.log(`  Fingerprint: ${fp}`);
-    console.log(`\nKey is NOT trusted yet. Run: openfuse key trust ${name}`);
+    if (autoTrust) {
+      console.log(`  Auto-trusted (workspace mode)`);
+    } else {
+      console.log(`\nKey is NOT trusted yet. Run: openfuse key trust ${name}`);
+    }
   });
 
 key
