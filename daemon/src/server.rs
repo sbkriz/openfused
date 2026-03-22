@@ -72,8 +72,9 @@ async fn get_config(
 /// SOUL.md is deliberately NOT served (private identity, never leaves the host).
 async fn get_profile(
     State(store): State<Arc<ContextStore>>,
-) -> Result<Vec<u8>, StatusCode> {
-    store.read_file("PROFILE.md").await.ok_or(StatusCode::NOT_FOUND)
+) -> Result<(StatusCode, [(axum::http::header::HeaderName, &'static str); 1], Vec<u8>), StatusCode> {
+    let body = store.read_file("PROFILE.md").await.ok_or(StatusCode::NOT_FOUND)?;
+    Ok((StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")], body))
 }
 
 async fn list_root(State(store): State<Arc<ContextStore>>) -> Json<Vec<FileEntry>> {
