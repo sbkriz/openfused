@@ -29,7 +29,8 @@ enum Commands {
         #[arg(short, long, default_value = "0.0.0.0")]
         bind: String,
 
-        /// Public mode: only serve PROFILE.md + inbox (for WAN/tunnels)
+        /// Public mode: only PROFILE.md + inbox (safe for internet/tunnels).
+        /// Without this, full mode serves shared/, knowledge/, CONTEXT.md — LAN/VPN only!
         #[arg(long)]
         public: bool,
     },

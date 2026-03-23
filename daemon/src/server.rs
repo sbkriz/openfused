@@ -29,9 +29,10 @@ pub async fn serve(store_path: PathBuf, bind: &str, port: u16, public: bool) {
         .route("/outbox/{name}/{filename}", delete(ack_outbox));
 
     if public {
-        tracing::info!("Public mode: serving PROFILE.md + inbox only");
+        tracing::info!("Public mode: serving PROFILE.md + inbox only (safe for internet)");
     } else {
-        tracing::info!("Full mode: serving all context to peers");
+        tracing::warn!("⚠ Full mode: serving CONTEXT.md, shared/, knowledge/ to anyone who connects");
+        tracing::warn!("⚠ Only use on trusted LAN/VPN. For internet use, add --public");
         app = app
             .route("/ls", get(list_root))
             .route("/ls/{*path}", get(list_dir))
