@@ -2,7 +2,7 @@
 
 import { Command } from "commander";
 import { nanoid } from "nanoid";
-import { ContextStore, validateName } from "./store.js";
+import { ContextStore, validateName, resolveKeyring } from "./store.js";
 import { watchInbox, watchContext, watchSync } from "./watch.js";
 import { syncAll, syncOne, deliverOne } from "./sync.js";
 import * as registry from "./registry.js";
@@ -492,10 +492,19 @@ key
       console.log("Keyring is empty. Import keys with: openfuse key import <name> <keyfile>");
       return;
     }
+    // Detect name collisions for display
+    const nameCounts = new Map<string, number>();
+    for (const e of config.keyring) nameCounts.set(e.name, (nameCounts.get(e.name) || 0) + 1);
+
     for (const e of config.keyring) {
       const trust = e.trusted ? "[TRUSTED]" : "[untrusted]";
       const addr = e.address || "(no address)";
-      console.log(`${e.name}  ${addr}  ${trust}`);
+      const shortFp = e.fingerprint.replace(/:/g, "").slice(0, 8);
+      // Show fingerprint suffix when names collide so user knows how to disambiguate
+      const displayName = (nameCounts.get(e.name) || 0) > 1
+        ? `${e.name}:${shortFp}`
+        : e.name;
+      console.log(`${displayName}  ${addr}  ${trust}`);
       console.log(`  signing:    ${e.signingKey}`);
       console.log(`  encryption: ${e.encryptionKey ?? "(no age key)"}`);
       console.log(`  fingerprint: ${e.fingerprint}\n`);
@@ -540,34 +549,26 @@ key
   });
 
 key
-  .command("trust <name>")
-  .description("Trust a key in the keyring")
+  .command("trust <query>")
+  .description("Trust a key in the keyring (name, name:fingerprint, or fingerprint)")
   .option("-d, --dir <path>", "Context store directory", ".")
-  .action(async (name, opts) => {
+  .action(async (query, opts) => {
     const store = new ContextStore(resolve(opts.dir));
     const config = await store.readConfig();
-    const entry = config.keyring.find((e) => e.name === name || e.fingerprint === name);
-    if (!entry) {
-      console.error(`Key not found: ${name}`);
-      process.exit(1);
-    }
+    const entry = resolveKeyring(config.keyring, query);
     entry.trusted = true;
     await store.writeConfig(config);
     console.log(`Trusted: ${entry.name} (${entry.fingerprint})`);
   });
 
 key
-  .command("untrust <name>")
-  .description("Revoke trust for a key")
+  .command("untrust <query>")
+  .description("Revoke trust for a key (name, name:fingerprint, or fingerprint)")
   .option("-d, --dir <path>", "Context store directory", ".")
-  .action(async (name, opts) => {
+  .action(async (query, opts) => {
     const store = new ContextStore(resolve(opts.dir));
     const config = await store.readConfig();
-    const entry = config.keyring.find((e) => e.name === name || e.fingerprint === name);
-    if (!entry) {
-      console.error(`Key not found: ${name}`);
-      process.exit(1);
-    }
+    const entry = resolveKeyring(config.keyring, query);
     entry.trusted = false;
     await store.writeConfig(config);
     console.log(`Revoked trust: ${entry.name} (${entry.fingerprint})`);

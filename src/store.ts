@@ -58,6 +58,60 @@ export function validateName(name: string, label = "Name"): string {
   return name;
 }
 
+/** Resolve a keyring entry by name, name:fingerprint, or bare fingerprint prefix.
+ *  Throws if ambiguous (multiple matches) or not found. */
+export function resolveKeyring(keyring: KeyringEntry[], query: string): KeyringEntry {
+  let name: string;
+  let fpPrefix: string | undefined;
+
+  if (query.includes(":")) {
+    // name:FINGERPRINT format — split on LAST colon group that looks like hex
+    const colonIdx = query.lastIndexOf(":");
+    const maybeFp = query.slice(colonIdx + 1);
+    if (/^[0-9a-fA-F]{4,16}$/.test(maybeFp)) {
+      name = query.slice(0, colonIdx);
+      fpPrefix = maybeFp.toUpperCase();
+    } else {
+      name = query;
+    }
+  } else {
+    name = query;
+  }
+
+  // Match by name (or address prefix)
+  let matches = keyring.filter(
+    (k) => k.name === name || k.address.startsWith(`${name}@`)
+  );
+
+  // If no name match, try bare fingerprint prefix
+  if (matches.length === 0 && /^[0-9a-fA-F]{4,16}$/.test(query)) {
+    const upper = query.toUpperCase();
+    matches = keyring.filter(
+      (k) => k.fingerprint.replace(/:/g, "").startsWith(upper)
+    );
+  }
+
+  // Filter by fingerprint prefix if provided
+  if (fpPrefix && matches.length > 1) {
+    matches = matches.filter(
+      (k) => k.fingerprint.replace(/:/g, "").startsWith(fpPrefix!)
+    );
+  }
+
+  if (matches.length === 0) {
+    throw new Error(`Key not found: "${query}". Run: openfuse key list`);
+  }
+  if (matches.length > 1) {
+    const options = matches.map(
+      (k) => `  ${k.name}:${k.fingerprint.replace(/:/g, "").slice(0, 8)}  ${k.address}`
+    ).join("\n");
+    throw new Error(
+      `Multiple keys match "${query}". Disambiguate with fingerprint:\n${options}`
+    );
+  }
+  return matches[0];
+}
+
 export class ContextStore {
   readonly root: string;
 
@@ -235,21 +289,11 @@ export class ContextStore {
   // --- Inbox ---
 
   async sendInbox(peerId: string, message: string): Promise<string> {
-    validateName(peerId, "Recipient name");
     const config = await this.readConfig();
 
-    // Require recipient in keyring — prevents name-squatting attacks on outbox files
-    // and ensures every envelope has a fingerprint suffix for identity binding.
-    const entry = config.keyring.find(
-      (e) => e.name === peerId || e.address.startsWith(`${peerId}@`)
-    );
-    if (!entry) {
-      throw new Error(
-        `"${peerId}" is not in your keyring. Import their key first:\n` +
-        `  openfuse key import ${peerId} <keyfile>\n` +
-        `  openfuse key trust ${peerId}`
-      );
-    }
+    // Resolve recipient from keyring — supports name, name:fingerprint, or bare fingerprint.
+    // Throws if ambiguous or not found.
+    const entry = resolveKeyring(config.keyring, peerId);
 
     let signed: SignedMessage;
     if (entry.encryptionKey) {
