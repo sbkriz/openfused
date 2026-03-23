@@ -334,6 +334,10 @@ Works over local filesystem, GCS buckets (gcsfuse), S3, or any FUSE-mountable st
 - **Any CLI agent** — if it can read files, it can use OpenFused
 - **Any cloud** — GCP, AWS, Azure, bare metal, your laptop
 
+## Community
+
+[Discord](https://discord.gg/gbR9TURc) · [GitHub Discussions](https://github.com/openfused/openfused/discussions) · [Contributing](CONTRIBUTING.md)
+
 ## Philosophy
 
 > *Intelligence is what happens when information flows through a sufficiently complex and appropriately organized system. The medium is not the message. The medium is just the medium. The message is the pattern.*
