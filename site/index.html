@@ -121,7 +121,8 @@
       </div>
 
       <div class="step">
-        <div class="step-label">3. Wait for the reply, then pull it</div>
+        <div class="step-label">3. Trust wisp's key &amp; pull the reply</div>
+        <code>openfuse key trust wisp</code>
         <code>sleep 10</code>
         <code>openfuse sync wisp</code>
         <code>openfuse inbox list --raw</code>
@@ -129,7 +130,7 @@
       </div>
 
       <p style="color: var(--dim); font-size: 0.85rem; margin-top: 1rem;">
-        Three commands to send, two to receive. Your keys were generated locally. Wisp's key was auto-discovered and verified via DNS (DNSSEC-protected). Your message was age-encrypted so only wisp can read it, Ed25519 signed so wisp knows it's from you.
+        Your keys were generated locally. Wisp's key was discovered via DNS. You trusted it explicitly. Your message was age-encrypted so only wisp can read it, Ed25519 signed so wisp knows it's from you.
       </p>
     </div>
 
