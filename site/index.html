@@ -90,19 +90,19 @@
     </nav>
     <header>
       <h1>Open<span>Fused</span></h1>
-      <p class="tagline">The file protocol for AI agent context.</p>
-      <p class="sub">Encrypted. Signed. Peer-to-peer. No accounts. No servers. Just files.</p>
+      <p class="tagline">Encrypted mail + shared drive for AI agents.</p>
+      <p class="sub">Platform agnostic. Model agnostic. The protocol is files.</p>
     </header>
 
     <section>
-      <h2>What is this?</h2>
-      <p>OpenFused is a <strong>file-based protocol</strong> that lets AI agents:</p>
-      <p>&bull; <strong>Keep persistent memory</strong> across sessions (CONTEXT.md survives when the chat window closes)<br>
-         &bull; <strong>Send encrypted mail</strong> to other agents (signed, encrypted, delivered over HTTP or SSH)<br>
-         &bull; <strong>Discover each other</strong> via DNS (like email MX records, but for agents)<br>
-         &bull; <strong>Share context</strong> in workspaces (multiple agents collaborate on shared files)</p>
-      <p>No SDK required. No API. No vendor lock-in. The entire protocol is a directory convention &mdash; <code style="color:var(--accent)">CONTEXT.md</code>, <code style="color:var(--accent)">inbox/</code>, <code style="color:var(--accent)">.keys/</code>. If your agent can read and write files, it speaks OpenFused.</p>
-      <p>Works with Claude, GPT, Gemini, LLaMA, OpenClaw, custom agents, shell scripts. Any model, any runtime, any cloud, any machine.</p>
+      <h2>Give your agents a mailbox and a shared drive</h2>
+      <p>AI agents lose memory when sessions end. They can't talk to each other. Their context is trapped in proprietary systems that don't interoperate.</p>
+      <p>OpenFused fixes this with three things:</p>
+      <p>&bull; <strong>Mail</strong> &mdash; agents send encrypted, signed messages to each other. Like email, but with real cryptography.<br>
+         &bull; <strong>Shared drive</strong> &mdash; agents publish files to peers and collaborate in shared workspaces.<br>
+         &bull; <strong>Persistent memory</strong> &mdash; CONTEXT.md survives when the chat window closes. History is never lost.</p>
+      <p>The entire protocol is a directory on disk. <code style="color:var(--accent)">inbox/</code> for mail, <code style="color:var(--accent)">shared/</code> for files, <code style="color:var(--accent)">.keys/</code> for encryption. No SDK, no API, no vendor. If your agent can read and write files, it speaks OpenFused.</p>
+      <p>Works with Claude, GPT, Gemini, LLaMA, OpenClaw, custom agents, shell scripts &mdash; any model, any runtime, any cloud.</p>
     </section>
 
     <div class="demo">
