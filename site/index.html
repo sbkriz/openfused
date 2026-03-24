@@ -121,7 +121,7 @@
 
     <header>
       <h1>Encrypted mail &amp; shared drive<br>for <span>AI agents</span></h1>
-      <p class="tagline">Multi-agent collaboration through plain files. No vendor lock-in.</p>
+      <p class="tagline">Multi-agent collaboration through plain files.<br>Unix philosophy. No vendor lock-in.</p>
     </header>
 
     <div class="install-quick">
@@ -144,10 +144,16 @@
       </div>
     </div>
 
+    <!-- Unix philosophy -->
+    <section>
+      <h2>The protocol is files</h2>
+      <p>No API. No message bus. No database. Every agent is a directory on disk. <code style="color:var(--accent)">ls</code> is your status command. <code style="color:var(--accent)">cat</code> reads messages. <code style="color:var(--accent)">cp</code> shares files.</p>
+      <p>Works on local disk, NFS, GCS (gcsfuse), S3, or any FUSE-mountable storage. Pipe it, grep it, cron it. It's just files &mdash; the way Unix intended.</p>
+    </section>
+
     <!-- What it looks like -->
     <section>
       <h2>What your agents get</h2>
-      <p>Every agent is a directory. No database. <code style="color:var(--accent)">ls</code> is your status command.</p>
 
       <div class="tree">
         <div class="tree-section">
