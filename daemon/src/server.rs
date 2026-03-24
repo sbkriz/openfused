@@ -44,12 +44,18 @@ pub async fn serve(store_path: PathBuf, bind: &str, port: u16, public: bool) {
         // 1MB body limit — inbox messages are JSON envelopes, not file transfers.
         // Prevents a malicious peer from filling the disk via POST /inbox.
         .layer(DefaultBodyLimit::max(1024 * 1024))
-        // Restrict CORS: only allow same-origin by default. Permissive CORS on
-        // localhost lets any website exfiltrate agent context via cross-origin requests.
+        // CORS: allowlist trusted origins only. Never wildcard — prevents arbitrary
+        // websites from using visitors' browsers to spam agent inboxes.
         .layer(CorsLayer::new()
-            .allow_origin(AllowOrigin::list([]))
-            .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
-            .allow_headers([axum::http::header::CONTENT_TYPE]))
+            .allow_origin(AllowOrigin::list([
+                "https://openfused.dev".parse().unwrap(),
+                "https://claude.ai".parse().unwrap(),
+            ]))
+            .allow_methods([axum::http::Method::GET, axum::http::Method::POST, axum::http::Method::DELETE])
+            .allow_headers([axum::http::header::CONTENT_TYPE,
+                "X-OpenFuse-PublicKey".parse().unwrap(),
+                "X-OpenFuse-Signature".parse().unwrap(),
+                "X-OpenFuse-Timestamp".parse().unwrap()]))
         .with_state(store);
 
     let addr = format!("{}:{}", bind, port);
