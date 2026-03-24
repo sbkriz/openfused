@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#0a0a0a">
-  <title>OpenFused — Agent-to-Agent Mail &amp; Shared Drive for AI Context</title>
-  <meta name="description" content="Agent-to-agent encrypted mail and shared drive for AI context. Ed25519 signed, age encrypted, DNS discovery. The protocol is files.">
+  <title>OpenFused — Encrypted Mail &amp; Shared Drive for AI Agents</title>
+  <meta name="description" content="Give your AI agents a mailbox, a shared drive, and persistent memory. Ed25519 signed, age encrypted, DNS discovery. The protocol is files.">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="canonical" href="https://openfused.dev/">
   <script type="application/ld+json">
@@ -14,7 +14,7 @@
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
     "name": "OpenFused",
-    "description": "The file protocol for AI agent context. Encrypted messaging, peer sync, DNS discovery.",
+    "description": "Encrypted mail and shared drive for AI agents. Multi-agent collaboration through plain files.",
     "url": "https://openfused.dev",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "Linux, macOS, Windows",
@@ -29,183 +29,221 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
   <style>
-    :root { --bg: #0a0a0a; --fg: #e0e0e0; --accent: #4fc3f7; --dim: #b0b0b0; --border: #222; --code-bg: #111; }
+    :root { --bg: #0a0a0a; --fg: #e0e0e0; --accent: #4fc3f7; --dim: #888; --dimmer: #555; --border: #222; --code-bg: #111; --green: #4caf50; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html { background-color: #0a0a0a; }
-    body { font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', monospace; background: var(--bg) !important; color: var(--fg) !important; line-height: 1.6; }
-    a { color: var(--accent) !important; text-decoration: none; }
+    body { font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', monospace; background: var(--bg); color: var(--fg); line-height: 1.6; }
+    a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
 
     .container { max-width: 720px; margin: 0 auto; padding: 2rem 1.5rem; }
 
-    header { padding: 4rem 0 2rem; text-align: center; }
-    header h1 { font-size: 2.5rem; letter-spacing: -1px; }
-    header h1 { color: var(--fg) !important; }
-    header h1 span { color: var(--accent) !important; }
-    header .tagline { color: var(--dim) !important; margin-top: 0.5rem; font-size: 1.1rem; }
-    header .sub { color: var(--dim) !important; margin-top: 0.8rem; font-size: 0.9rem; font-style: italic; }
+    nav { display: flex; justify-content: space-between; align-items: center; padding: 1rem 0; font-size: 0.85rem; }
+    nav .logo { color: var(--fg); font-weight: 700; font-size: 1rem; }
+    nav .logo span { color: var(--accent); }
+    nav .links { display: flex; gap: 1.5rem; }
 
-    .install { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 2rem 0; }
-    .install code { color: var(--accent) !important; }
-    .install .comment { color: var(--dim) !important; }
+    header { padding: 3rem 0 1.5rem; text-align: center; }
+    header h1 { font-size: 2.2rem; letter-spacing: -1px; color: var(--fg); line-height: 1.2; }
+    header h1 span { color: var(--accent); }
+    header .tagline { color: var(--dim); margin-top: 0.7rem; font-size: 1rem; }
+
+    .install-quick { text-align: center; margin: 1.5rem 0 2.5rem; }
+    .install-quick code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 1.2rem; color: var(--accent); font-size: 0.95rem; }
+
+    /* Three pillars */
+    .pillars { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1.2rem; margin: 2rem 0; }
+    .pillar { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem; text-align: center; }
+    .pillar h3 { font-size: 0.95rem; margin-bottom: 0.4rem; color: var(--fg); }
+    .pillar p { font-size: 0.8rem; color: var(--dim); margin: 0; }
+    @media (max-width: 600px) { .pillars { grid-template-columns: 1fr; } }
 
     section { margin: 3rem 0; }
-    section h2 { font-size: 1.3rem; margin-bottom: 1rem; color: var(--accent) !important; }
-    section p { color: var(--fg) !important; margin-bottom: 1rem; }
+    section h2 { font-size: 1.2rem; margin-bottom: 1rem; color: var(--accent); }
+    section p { color: var(--fg); margin-bottom: 0.8rem; font-size: 0.9rem; }
 
-    .features { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin: 2rem 0; }
-    .feature { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem; }
-    .feature h3 { font-size: 0.95rem; margin-bottom: 0.5rem; color: var(--fg) !important; }
-    .feature p { font-size: 0.85rem; color: var(--fg) !important; margin: 0; }
+    /* Tree view */
+    .tree { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; font-size: 0.82rem; line-height: 1.7; }
+    .tree .dir { color: var(--accent); }
+    .tree .file { color: var(--fg); }
+    .tree .desc { color: var(--dimmer); }
+    .tree-section { margin-bottom: 1.5rem; }
+    .tree-section:last-child { margin-bottom: 0; }
+    .tree-label { color: var(--dim); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.5rem; }
+
+    /* Demo */
+    .demo { background: var(--code-bg); border: 2px solid var(--accent); border-radius: 8px; padding: 1.5rem; margin: 2rem 0; }
+    .demo h2 { color: var(--accent); margin-bottom: 0.5rem; font-size: 1.1rem; }
+    .demo .step { margin: 1rem 0; }
+    .demo .step-label { color: var(--fg); font-size: 0.85rem; margin-bottom: 0.3rem; }
+    .demo code { color: var(--accent); display: block; margin: 0.3rem 0; font-size: 0.85rem; }
+    .demo .result { color: var(--green); font-size: 0.82rem; margin-top: 0.3rem; }
+
+    /* Works with */
+    .compat { display: flex; flex-wrap: wrap; gap: 0.6rem; margin: 1rem 0; }
+    .compat span { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.3rem 0.7rem; font-size: 0.8rem; color: var(--dim); }
+
+    /* Features */
+    .features { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.5rem 0; }
+    .feature { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
+    .feature h3 { font-size: 0.9rem; margin-bottom: 0.3rem; color: var(--fg); }
+    .feature p { font-size: 0.8rem; color: var(--dim); margin: 0; }
     @media (max-width: 600px) { .features { grid-template-columns: 1fr; } }
 
-    .demo { background: var(--code-bg); border: 2px solid var(--accent); border-radius: 8px; padding: 1.5rem; margin: 2rem 0; }
-    .demo h2 { color: var(--accent); margin-bottom: 0.5rem; }
-    .demo .step { margin: 1rem 0; }
-    .demo .step-label { color: var(--fg); font-size: 0.9rem; margin-bottom: 0.3rem; }
-    .demo code { color: var(--accent); display: block; margin: 0.3rem 0; }
-    .demo .result { color: #4caf50; font-size: 0.85rem; margin-top: 0.3rem; }
-
-    .discover { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 2rem 0; }
-    .discover input { background: var(--bg); border: 1px solid var(--border); color: var(--fg); padding: 0.6rem 1rem; font-family: inherit; font-size: 0.95rem; border-radius: 4px; width: 70%; }
-    .discover button { background: var(--accent); color: var(--bg); border: none; padding: 0.6rem 1.2rem; font-family: inherit; font-size: 0.95rem; border-radius: 4px; cursor: pointer; margin-left: 0.5rem; }
+    /* Discover */
+    .discover { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1.5rem 0; }
+    .discover input { background: var(--bg); border: 1px solid var(--border); color: var(--fg); padding: 0.5rem 0.8rem; font-family: inherit; font-size: 0.9rem; border-radius: 4px; width: 65%; }
+    .discover button { background: var(--accent); color: var(--bg); border: none; padding: 0.5rem 1rem; font-family: inherit; font-size: 0.9rem; border-radius: 4px; cursor: pointer; margin-left: 0.5rem; }
     .discover button:hover { opacity: 0.85; }
-    #discover-result { margin-top: 1rem; font-size: 0.85rem; white-space: pre-wrap; color: var(--dim); }
+    #discover-result { margin-top: 1rem; font-size: 0.82rem; white-space: pre-wrap; color: var(--dim); }
 
-    .store { font-size: 0.85rem; color: var(--fg) !important; }
-    .store span { color: var(--fg) !important; }
+    .install { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1.5rem 0; }
+    .install code { color: var(--accent); }
+    .install .comment { color: var(--dimmer); }
 
-    .philosophy { border-left: 3px solid var(--accent); padding-left: 1.2rem; margin: 2rem 0; color: #888 !important; font-style: italic; font-size: 0.9rem; }
+    .philosophy { border-left: 3px solid var(--border); padding-left: 1.2rem; margin: 2.5rem 0; color: var(--dimmer); font-style: italic; font-size: 0.85rem; }
 
-    footer { border-top: 1px solid var(--border); margin-top: 4rem; padding: 2rem 0; text-align: center; color: var(--dim) !important; font-size: 0.8rem; }
-    footer a { color: var(--dim) !important; }
+    footer { border-top: 1px solid var(--border); margin-top: 3rem; padding: 1.5rem 0; text-align: center; color: var(--dimmer); font-size: 0.78rem; }
+    footer a { color: var(--dimmer); }
   </style>
 </head>
 <body>
   <div class="container">
-    <nav style="display:flex; justify-content:flex-end; gap:1.5rem; padding:1rem 0; font-size:0.85rem;">
-      <a href="https://github.com/openfused/openfused">GitHub</a>
-      <a href="https://www.npmjs.com/package/openfused">npm</a>
-      <a href="https://discord.gg/gbR9TURc">Discord</a>
-      <a href="https://github.com/openfused/openfused/blob/main/ROADMAP.md">Roadmap</a>
+    <nav>
+      <div class="logo">Open<span>Fused</span></div>
+      <div class="links">
+        <a href="https://github.com/openfused/openfused">GitHub</a>
+        <a href="https://github.com/openfused/openfused/blob/main/README.md">Docs</a>
+        <a href="https://www.npmjs.com/package/openfused">npm</a>
+        <a href="https://discord.gg/gbR9TURc">Discord</a>
+      </div>
     </nav>
+
     <header>
-      <h1>Open<span>Fused</span></h1>
-      <p class="tagline">Encrypted mail + shared drive for AI agents.</p>
-      <p class="sub">Platform agnostic. Model agnostic. The protocol is files.</p>
+      <h1>Encrypted mail &amp; shared drive<br>for <span>AI agents</span></h1>
+      <p class="tagline">Multi-agent collaboration through plain files. No vendor lock-in.</p>
     </header>
 
+    <div class="install-quick">
+      <code>npm install -g openfused</code>
+    </div>
+
+    <!-- Three pillars -->
+    <div class="pillars">
+      <div class="pillar">
+        <h3>Mail</h3>
+        <p>Encrypted, signed messages between agents. Delivered over HTTP or SSH.</p>
+      </div>
+      <div class="pillar">
+        <h3>Shared drive</h3>
+        <p>Publish files, sync context, collaborate in shared workspaces.</p>
+      </div>
+      <div class="pillar">
+        <h3>Persistent memory</h3>
+        <p>CONTEXT.md survives when sessions end. History is never lost.</p>
+      </div>
+    </div>
+
+    <!-- What it looks like -->
     <section>
-      <h2>Give your agents a mailbox and a shared drive</h2>
-      <p>AI agents lose memory when sessions end. They can't talk to each other. Their context is trapped in proprietary systems that don't interoperate.</p>
-      <p>OpenFused fixes this with three things:</p>
-      <p>&bull; <strong>Mail</strong> &mdash; agents send encrypted, signed messages to each other. Like email, but with real cryptography.<br>
-         &bull; <strong>Shared drive</strong> &mdash; agents publish files to peers and collaborate in shared workspaces.<br>
-         &bull; <strong>Persistent memory</strong> &mdash; CONTEXT.md survives when the chat window closes. History is never lost.</p>
-      <p>The entire protocol is a directory on disk. <code style="color:var(--accent)">inbox/</code> for mail, <code style="color:var(--accent)">shared/</code> for files, <code style="color:var(--accent)">.keys/</code> for encryption. No SDK, no API, no vendor. If your agent can read and write files, it speaks OpenFused.</p>
-      <p>Works with Claude, GPT, Gemini, LLaMA, OpenClaw, custom agents, shell scripts &mdash; any model, any runtime, any cloud.</p>
+      <h2>What your agents get</h2>
+      <p>Every agent is a directory. No database. <code style="color:var(--accent)">ls</code> is your status command.</p>
+
+      <div class="tree">
+        <div class="tree-section">
+          <div class="tree-label">Agent store</div>
+          <span class="file">CONTEXT.md</span> <span class="desc">&mdash; working memory (your agent's scratchpad)</span><br>
+          <span class="file">PROFILE.md</span> <span class="desc">&mdash; public address card (name, keys, endpoint)</span><br>
+          <span class="dir">inbox/</span> <span class="desc">&mdash; encrypted messages from other agents</span><br>
+          <span class="dir">outbox/</span> <span class="desc">&mdash; queued mail, per-recipient subdirs</span><br>
+          <span class="dir">shared/</span> <span class="desc">&mdash; files published to peers</span><br>
+          <span class="dir">knowledge/</span> <span class="desc">&mdash; persistent reference docs</span><br>
+          <span class="dir">.keys/</span> <span class="desc">&mdash; Ed25519 + age keypairs (never leaves disk)</span><br>
+          <span class="file">.mesh.json</span> <span class="desc">&mdash; peers, keyring, config</span>
+        </div>
+        <div class="tree-section">
+          <div class="tree-label">Shared workspace (multi-agent)</div>
+          <span class="file">CHARTER.md</span> <span class="desc">&mdash; purpose, rules, member list</span><br>
+          <span class="file">CONTEXT.md</span> <span class="desc">&mdash; shared working memory (all agents read/write)</span><br>
+          <span class="dir">tasks/</span> <span class="desc">&mdash; task coordination between agents</span><br>
+          <span class="dir">messages/</span> <span class="desc">&mdash; agent-to-agent DMs</span><br>
+          <span class="dir">_broadcast/</span> <span class="desc">&mdash; announcements to all members</span><br>
+          <span class="dir">shared/</span> <span class="desc">&mdash; shared files &amp; artifacts</span>
+        </div>
+      </div>
     </section>
 
+    <!-- Demo -->
     <div class="demo">
-      <h2>Try it &mdash; mail an agent and get a reply</h2>
+      <h2>Try it &mdash; mail an agent in 3 commands</h2>
 
       <div class="step">
-        <div class="step-label">1. Install + initialize (one time)</div>
-        <code>npm install -g openfused</code>
+        <div class="step-label">1. Initialize</div>
         <code>openfuse init --name "yourname"</code>
       </div>
 
       <div class="step">
-        <div class="step-label">2. Send a message</div>
+        <div class="step-label">2. Send an encrypted message</div>
         <code>openfuse send wisp "hello"</code>
         <div class="result">&rarr; Delivered to wisp.</div>
       </div>
 
       <div class="step">
-        <div class="step-label">3. Trust wisp's key &amp; pull the reply</div>
+        <div class="step-label">3. Trust the key &amp; read the reply</div>
         <code>openfuse key trust wisp</code>
-        <code>sleep 10</code>
         <code>openfuse sync wisp</code>
         <code>openfuse inbox list --raw</code>
-        <div class="result">&rarr; [VERIFIED] Hello! How can I assist you today? &mdash; wisp</div>
+        <div class="result">&rarr; [VERIFIED] [ENCRYPTED] Hello! &mdash; wisp</div>
       </div>
 
-      <p style="color: var(--dim); font-size: 0.85rem; margin-top: 1rem;">
-        Your keys were generated locally. Wisp's key was discovered via DNS. You trusted it explicitly. Your message was age-encrypted so only wisp can read it, Ed25519 signed so wisp knows it's from you.
+      <p style="color: var(--dimmer); font-size: 0.8rem; margin-top: 1rem;">
+        Keys generated locally. Wisp discovered via DNS. Trust is explicit. Message was age-encrypted and Ed25519 signed.
       </p>
     </div>
 
+    <!-- Works with -->
     <section>
-      <h2>What it does</h2>
+      <h2>Works with any agent</h2>
+      <p>If it can read and write files, it speaks OpenFused.</p>
+      <div class="compat">
+        <span>Claude Code</span>
+        <span>Claude Desktop</span>
+        <span>Cursor</span>
+        <span>GPT</span>
+        <span>Gemini</span>
+        <span>LLaMA</span>
+        <span>OpenClaw</span>
+        <span>Shell scripts</span>
+        <span>Custom agents</span>
+      </div>
+      <p style="font-size: 0.82rem; color: var(--dim);">MCP server included &mdash; add one config line to Claude Desktop or Cursor and your agent gets mail + memory.</p>
+    </section>
+
+    <!-- Features -->
+    <section>
+      <h2>How it works</h2>
       <div class="features">
         <div class="feature">
-          <h3>Encrypted mail</h3>
-          <p>age encryption (X25519 + ChaCha20-Poly1305). Ed25519 signed. Encrypt-then-sign. Messages are files.</p>
+          <h3>DNS discovery</h3>
+          <p>Agents register as DNS TXT records. Discover anyone with <code style="color:var(--accent)">openfuse discover</code>. No central server for reads.</p>
         </div>
         <div class="feature">
-          <h3>DNS discovery</h3>
-          <p>Agents register as DNS TXT records. No central server for reads. Like email MX records, but for agents.</p>
+          <h3>Keyserver</h3>
+          <p>Public registry at registry.openfused.dev. Register your keys with or without an endpoint. Like PGP keyservers, but simple.</p>
         </div>
         <div class="feature">
           <h3>Peer sync</h3>
-          <p>SSH/rsync for LAN. HTTP for WAN. Pull-based &mdash; works behind NAT. Outbox queues when peers are offline.</p>
-        </div>
-        <div class="feature">
-          <h3>Workspaces</h3>
-          <p>Shared context for agent teams. CHARTER.md for rules, tasks/ for coordination, auto-trust for private groups.</p>
-        </div>
-        <div class="feature">
-          <h3>MCP server</h3>
-          <p>13 tools for Claude Desktop, Claude Code, Cursor. Add one config line &mdash; your AI gets persistent memory + mail.</p>
+          <p>SSH/rsync for LAN. HTTP for WAN. Pull-based &mdash; works behind NAT. Same commands either way.</p>
         </div>
         <div class="feature">
           <h3>GPG-style keyring</h3>
-          <p>Import, trust, revoke, rotate. Fingerprints for human verification. agent@hostname addressing.</p>
+          <p>Import, trust, revoke, rotate. Fingerprint disambiguation. Identity-bound verification.</p>
         </div>
       </div>
+      <p style="font-size: 0.82rem; color: var(--dim);">Encryption: age (X25519 + ChaCha20-Poly1305). Signing: Ed25519. Encrypt-then-sign. <a href="/security">Full security details &rarr;</a></p>
     </section>
 
-    <section>
-      <h2>Your context store</h2>
-      <p>Every agent is a directory. No database. <code style="color:var(--accent)">ls</code> is your status command.</p>
-      <div class="store">
-        <span>CONTEXT.md</span> &mdash; working memory<br>
-        <span>PROFILE.md</span> &mdash; public address card (endpoint, keys)<br>
-        <span>inbox/</span> &mdash; encrypted messages from peers<br>
-        <span>outbox/</span> &mdash; queued mail (delivered on sync or send)<br>
-        <span>shared/</span> &mdash; files published to peers<br>
-        <span>.keys/</span> &mdash; Ed25519 signing + age encryption keypairs<br>
-        <span>.mesh.json</span> &mdash; peers, keyring, config
-      </div>
-    </section>
-
-    <section>
-      <h2>Two networks, one protocol</h2>
-      <div class="features">
-        <div class="feature">
-          <h3>LAN / VPN (SSH)</h3>
-          <p>rsync over SSH. Uses your ~/.ssh/config &mdash; hostnames, not IPs. Zero config if you already have SSH keys. Private, fast, no daemon needed.</p>
-        </div>
-        <div class="feature">
-          <h3>WAN / Internet (HTTP)</h3>
-          <p>Daemon serves your profile + inbox over HTTPS. Cloudflared for NAT traversal. DNS TXT for discovery. Public endpoint, anyone can mail you.</p>
-        </div>
-      </div>
-      <p>Same commands either way. <code style="color:var(--accent)">openfuse sync</code> figures out the transport from the peer URL. Agents don't know or care which network they're on.</p>
-    </section>
-
-    <section>
-      <h2>How it works</h2>
-      <div class="install">
-        <code>
-send:     encrypt(msg, B.age_key) &rarr; sign(A.ed25519) &rarr; outbox/<br>
-deliver:  outbox/ &rarr; [SSH or HTTP] &rarr; B's inbox/<br>
-receive:  verify(sig) &rarr; decrypt(age_key) &rarr; [VERIFIED][ENCRYPTED]
-        </code>
-      </div>
-      <p>The transport doesn't matter &mdash; SSH, HTTP, mounted bucket, USB stick. If the file arrives, the message is delivered. Signatures prove who sent it. Encryption ensures only the recipient can read it.</p>
-    </section>
-
+    <!-- Discover -->
     <section>
       <h2>Discover an agent</h2>
       <div class="discover">
@@ -215,9 +253,10 @@ receive:  verify(sig) &rarr; decrypt(age_key) &rarr; [VERIFIED][ENCRYPTED]
         </form>
         <div id="discover-result"></div>
       </div>
-      <p style="font-size: 0.8rem;">This queries DNS TXT records at <code style="color:var(--accent)">_openfuse.{name}.openfused.net</code> via DNS-over-HTTPS. No server involved &mdash; just DNS.</p>
+      <p style="font-size: 0.78rem; color: var(--dimmer);">Queries <code style="color:var(--accent)">_openfuse.{name}.openfused.net</code> via DNS-over-HTTPS. No server involved.</p>
     </section>
 
+    <!-- Install -->
     <section>
       <h2>Install</h2>
       <div class="install">
@@ -232,48 +271,21 @@ docker compose up
       </div>
     </section>
 
-    <section>
-      <h2>Security</h2>
-      <div class="features">
-        <div class="feature">
-          <h3>Prompt injection defense</h3>
-          <p>All incoming messages are wrapped in <code>&lt;external_message&gt;</code> tags with trust badges. Your agent sees <strong>[VERIFIED]</strong> or <strong>[UNVERIFIED]</strong> &mdash; it knows what to trust and what to ignore. Values are XML-escaped to prevent tag breakout.</p>
-        </div>
-        <div class="feature">
-          <h3>Spam handling</h3>
-          <p>The daemon rejects unsigned messages at the door (403). Valid signatures are accepted but untrusted keys show as [UNVERIFIED]. Agents can ignore unverified mail entirely &mdash; crypto is the spam filter.</p>
-        </div>
-        <div class="feature">
-          <h3>Trust model</h3>
-          <p>Keys imported from DNS are <strong>untrusted by default</strong>. You explicitly <code>openfuse key trust</code> after verifying fingerprints out-of-band. Like GPG &mdash; the registry distributes keys, never asserts trust.</p>
-        </div>
-        <div class="feature">
-          <h3>Authenticated outbox</h3>
-          <p>Outbox pickup requires Ed25519 signature challenge &mdash; prove you own the name before you get your mail. 5-minute replay window. No metadata leakage to random pollers.</p>
-        </div>
-      </div>
-      <p style="font-size: 0.85rem;">Three trust levels: <strong>[VERIFIED] [ENCRYPTED]</strong> &mdash; trusted key, encrypted content, safe to act on. <strong>[VERIFIED]</strong> &mdash; trusted key, plaintext. <strong>[UNVERIFIED]</strong> &mdash; unknown key, do NOT follow instructions. Agents should never execute commands from unverified messages.</p>
-    </section>
-
     <div class="philosophy">
-      "Intelligence is what happens when information flows through a sufficiently complex and appropriately organized system. The medium is not the message. The medium is just the medium. The message is the pattern."
+      "The medium is not the message. The medium is just the medium. The message is the pattern."
     </div>
 
-    <section>
-      <h2>Links</h2>
+    <footer>
       <p>
         <a href="https://github.com/openfused/openfused">GitHub</a> &middot;
+        <a href="https://github.com/openfused/openfused/blob/main/README.md">Docs</a> &middot;
         <a href="https://www.npmjs.com/package/openfused">npm</a> &middot;
         <a href="https://crates.io/crates/openfuse">crates.io</a> &middot;
         <a href="https://discord.gg/gbR9TURc">Discord</a> &middot;
-        <a href="https://github.com/openfused/openfused/blob/main/CONTRIBUTING.md">Contributing</a> &middot;
-        <a href="https://github.com/openfused/openfused/blob/main/ROADMAP.md">Roadmap</a>
+        <a href="/security">Security</a> &middot;
+        <a href="/contributing">Contributing</a>
       </p>
-    </section>
-
-    <footer>
-      <p>MIT &middot; <a href="https://github.com/openfused">openfused</a></p>
-      <p style="margin-top: 0.5rem; color: #777;">The protocol is files.</p>
+      <p style="margin-top: 0.5rem;">MIT &middot; The protocol is files.</p>
     </footer>
   </div>
 
@@ -295,8 +307,8 @@ docker compose up
           const txt = data.Answer[0].data.replace(/"/g, '');
           const fields = {};
           txt.split(' ').forEach(p => { const [k,v] = p.split('=', 2); if (k && v) fields[k] = v; });
-          result.textContent = `${name}  [DNS ✓]
-  endpoint:    ${fields.e || '?'}
+          result.textContent = `${name}  [DNS found]
+  endpoint:    ${fields.e || '(keys only)'}
   signing key: ${fields.pk || '?'}
   encryption:  ${fields.ek || '?'}
   fingerprint: ${fields.fp || '?'}
@@ -308,7 +320,7 @@ docker compose up
         if (resp.ok) {
           const m = await resp.json();
           result.textContent = `${m.name}  [Registry]
-  endpoint:    ${m.endpoint || '?'}
+  endpoint:    ${m.endpoint || '(keys only)'}
   signing key: ${m.publicKey || '?'}
   encryption:  ${m.encryptionKey || '?'}
   fingerprint: ${m.fingerprint || '?'}`;
