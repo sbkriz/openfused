@@ -44,9 +44,10 @@ pub struct KeyringEntry {
     /// Address: agent-name@hostname (e.g. "wisp@alice.local")
     pub address: String,
     /// Ed25519 signing key (hex)
+    #[serde(rename = "signingKey")]
     pub signing_key: String,
     /// age recipient key (age1...)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "encryptionKey", skip_serializing_if = "Option::is_none")]
     pub encryption_key: Option<String>,
     /// SHA-256 fingerprint of signing key
     pub fingerprint: String,
