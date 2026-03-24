@@ -433,32 +433,24 @@ async fn main() -> Result<()> {
             KeyCommands::Trust { name, dir } => {
                 let s = ContextStore::new(&dir);
                 let mut config = s.read_config()?;
-                let idx = config.keyring.iter().position(|e| e.name == name || e.fingerprint == name);
-                match idx {
-                    Some(i) => {
-                        config.keyring[i].trusted = true;
-                        let kname = config.keyring[i].name.clone();
-                        let kfp = config.keyring[i].fingerprint.clone();
-                        s.write_config(&config)?;
-                        println!("Trusted: {} ({})", kname, kfp);
-                    }
-                    None => { eprintln!("Key not found: {}", name); std::process::exit(1); }
-                }
+                let entry = store::resolve_keyring(&config.keyring, &name)?;
+                let idx = config.keyring.iter().position(|e| e.signing_key == entry.signing_key).unwrap();
+                config.keyring[idx].trusted = true;
+                let kname = config.keyring[idx].name.clone();
+                let kfp = config.keyring[idx].fingerprint.clone();
+                s.write_config(&config)?;
+                println!("Trusted: {} ({})", kname, kfp);
             }
             KeyCommands::Untrust { name, dir } => {
                 let s = ContextStore::new(&dir);
                 let mut config = s.read_config()?;
-                let idx = config.keyring.iter().position(|e| e.name == name || e.fingerprint == name);
-                match idx {
-                    Some(i) => {
-                        config.keyring[i].trusted = false;
-                        let kname = config.keyring[i].name.clone();
-                        let kfp = config.keyring[i].fingerprint.clone();
-                        s.write_config(&config)?;
-                        println!("Revoked trust: {} ({})", kname, kfp);
-                    }
-                    None => { eprintln!("Key not found: {}", name); std::process::exit(1); }
-                }
+                let entry = store::resolve_keyring(&config.keyring, &name)?;
+                let idx = config.keyring.iter().position(|e| e.signing_key == entry.signing_key).unwrap();
+                config.keyring[idx].trusted = false;
+                let kname = config.keyring[idx].name.clone();
+                let kfp = config.keyring[idx].fingerprint.clone();
+                s.write_config(&config)?;
+                println!("Revoked trust: {} ({})", kname, kfp);
             }
             KeyCommands::Export { dir } => {
                 let s = ContextStore::new(&dir);

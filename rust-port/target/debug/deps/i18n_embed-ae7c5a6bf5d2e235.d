@@ -1,0 +1,11 @@
+/home/velinxs/Documents/openfuse/rust-port/target/debug/deps/i18n_embed-ae7c5a6bf5d2e235.d: /home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/lib.rs /home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/assets.rs /home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/requester.rs /home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/util.rs /home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/fluent.rs
+
+/home/velinxs/Documents/openfuse/rust-port/target/debug/deps/libi18n_embed-ae7c5a6bf5d2e235.rlib: /home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/lib.rs /home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/assets.rs /home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/requester.rs /home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/util.rs /home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/fluent.rs
+
+/home/velinxs/Documents/openfuse/rust-port/target/debug/deps/libi18n_embed-ae7c5a6bf5d2e235.rmeta: /home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/lib.rs /home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/assets.rs /home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/requester.rs /home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/util.rs /home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/fluent.rs
+
+/home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/lib.rs:
+/home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/assets.rs:
+/home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/requester.rs:
+/home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/util.rs:
+/home/velinxs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i18n-embed-0.15.4/src/fluent.rs:

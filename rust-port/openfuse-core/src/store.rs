@@ -25,6 +25,62 @@ pub fn validate_name(name: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
+/// Resolve a keyring entry by name, name:fingerprint, or bare fingerprint prefix.
+/// Returns an error if ambiguous (multiple matches) or not found.
+pub fn resolve_keyring<'a>(keyring: &'a [KeyringEntry], query: &str) -> Result<&'a KeyringEntry> {
+    let (name, fp_prefix) = if let Some(colon_idx) = query.rfind(':') {
+        let maybe_fp = &query[colon_idx + 1..];
+        if maybe_fp.chars().all(|c| c.is_ascii_hexdigit()) && maybe_fp.len() >= 4 && maybe_fp.len() <= 16 {
+            (&query[..colon_idx], Some(maybe_fp.to_uppercase()))
+        } else {
+            (query, None)
+        }
+    } else {
+        (query, None)
+    };
+
+    // Match by name or address prefix
+    let mut matches: Vec<&KeyringEntry> = keyring
+        .iter()
+        .filter(|k| k.name == name || k.address.starts_with(&format!("{}@", name)))
+        .collect();
+
+    // If no name match, try bare fingerprint prefix
+    if matches.is_empty() && query.chars().all(|c| c.is_ascii_hexdigit()) && query.len() >= 4 {
+        let upper = query.to_uppercase();
+        matches = keyring
+            .iter()
+            .filter(|k| k.fingerprint.replace(':', "").starts_with(&upper))
+            .collect();
+    }
+
+    // Filter by fingerprint prefix if provided
+    if let Some(ref fp) = fp_prefix {
+        if matches.len() > 1 {
+            matches.retain(|k| k.fingerprint.replace(':', "").starts_with(fp.as_str()));
+        }
+    }
+
+    match matches.len() {
+        0 => anyhow::bail!("Key not found: \"{}\". Run: openfuse key list", query),
+        1 => Ok(matches[0]),
+        _ => {
+            let options: Vec<String> = matches
+                .iter()
+                .map(|k| {
+                    let short_fp = k.fingerprint.replace(':', "");
+                    format!("  {}:{}  {}", k.name, &short_fp[..8.min(short_fp.len())], k.address)
+                })
+                .collect();
+            anyhow::bail!(
+                "Multiple keys match \"{}\". Disambiguate with fingerprint:\n{}",
+                query,
+                options.join("\n")
+            )
+        }
+    }
+}
+
 // Convention: the context store is a plain directory with well-known subdirs.
 // No database, no binary format — just files. Any tool that reads files can
 // participate in the mesh without importing a library.
@@ -217,17 +273,10 @@ impl ContextStore {
 
     /// Send a message to a peer. Encrypts if we have their age key in the keyring.
     pub fn send_inbox(&self, peer_id: &str, message: &str, from: &str) -> Result<()> {
-        validate_name(peer_id, "Recipient name")?;
         let config = self.read_config()?;
 
-        // Require recipient in keyring — prevents name-squatting attacks on outbox files
-        // and ensures every envelope has a fingerprint suffix for identity binding.
-        let entry = config.keyring.iter().find(|e| {
-            e.name == peer_id || e.address.starts_with(&format!("{}@", peer_id))
-        }).ok_or_else(|| anyhow::anyhow!(
-            "\"{}\" is not in your keyring. Import their key first:\n  openfuse key import {} <keyfile>\n  openfuse key trust {}",
-            peer_id, peer_id, peer_id
-        ))?;
+        // Resolve recipient from keyring — supports name, name:fingerprint, or bare fingerprint.
+        let entry = resolve_keyring(&config.keyring, peer_id)?;
 
         let signed = if let Some(ref age_key) = entry.encryption_key {
             crypto::sign_and_encrypt(&self.root, from, message, age_key)?
@@ -283,10 +332,16 @@ impl ContextStore {
                 }
 
                 let sig_valid = crypto::verify_message(&signed);
+                // Identity binding: key must be trusted AND name must match the keyring entry.
+                // Prevents a trusted agent from impersonating someone else via forged "from" field.
                 let trusted = config
                     .keyring
                     .iter()
-                    .any(|e| e.trusted && e.signing_key.trim() == signed.public_key.trim());
+                    .any(|e| {
+                        e.trusted
+                            && e.signing_key.trim() == signed.public_key.trim()
+                            && (e.name == signed.from || e.address.starts_with(&format!("{}@", signed.from)))
+                    });
 
                 let verified = sig_valid && trusted;
 
