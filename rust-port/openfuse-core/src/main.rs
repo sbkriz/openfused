@@ -16,7 +16,9 @@ fn main() {
         process::exit(1);
     }
 
-    let store_root = env::var("OPENFUSE_STORE").unwrap_or_else(|_| "/store".to_string());
+    // WASI preopens map "/store" → the actual store directory on the host.
+    // Always use "/store" as the root — the TS wrapper sets up the preopens.
+    let store_root = "/store".to_string();
     let root = Path::new(&store_root);
 
     let result = match args[1].as_str() {
