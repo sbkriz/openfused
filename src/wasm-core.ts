@@ -33,12 +33,13 @@ interface WasiCallResult {
 
 async function callWasm(storeRoot: string, args: string[]): Promise<WasiCallResult> {
   // Create a temp file to capture stdout (node:wasi doesn't support piping stdout directly)
+  // Restrictive permissions: 0o700 dir + 0o600 file — prevents other users from reading
+  // WASM output which may contain decrypted messages, keys, or config data.
   const tmpDir = await mkdtemp(join(tmpdir(), "openfuse-wasi-"));
+  const { chmodSync, openSync, closeSync } = await import("node:fs");
+  chmodSync(tmpDir, 0o700);
   const stdoutPath = join(tmpDir, "stdout");
-  await writeFile(stdoutPath, "");
-
-  const { openSync, closeSync } = await import("node:fs");
-  const fd = openSync(stdoutPath, "w");
+  const fd = openSync(stdoutPath, "w", 0o600);
 
   try {
     const wasi = new WASI({
@@ -81,7 +82,7 @@ async function callWasm(storeRoot: string, args: string[]): Promise<WasiCallResu
 async function callWasmJson<T>(storeRoot: string, args: string[]): Promise<T> {
   const { stdout, exitCode } = await callWasm(storeRoot, args);
   if (!stdout) {
-    throw new Error(`WASM returned empty output for: ${args.join(" ")}`);
+    throw new Error(`WASM returned empty output for command: ${args[0] ?? "unknown"}`);
   }
   const parsed = JSON.parse(stdout);
   if (exitCode !== 0 && parsed.error) {

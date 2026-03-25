@@ -21,3 +21,4 @@ drafts/hosted-mailbox-plan.md
 hosted/
 demo/
 rust-port/target/
+wasm/*.wasm

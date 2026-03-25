@@ -355,26 +355,10 @@ async fn receive_inbox(
 
 /// Verify a public key belongs to the claimed agent name by checking:
 /// 1. Inbox messages from this agent with matching publicKey
-/// 2. Keyring entries matching name + signing key
-/// 3. Legacy trusted_keys list
-/// Without this, any random keypair could impersonate a registered agent.
+/// Verify a public key belongs to a named agent via keyring or legacy trusted_keys.
+/// Only explicitly imported keys are accepted — inbox messages are NOT identity proof
+/// (anyone can send a message claiming any name with any key).
 async fn verify_key_ownership(store: &Arc<ContextStore>, name: &str, pubkey_hex: &str) -> bool {
-    // Check inbox for messages from this agent with matching key
-    let inbox_dir = store.root.join("inbox");
-    if let Ok(mut entries) = tokio::fs::read_dir(&inbox_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let fname = entry.file_name().to_string_lossy().to_string();
-            if !fname.contains(&format!("_from-{}", name)) { continue; }
-            if let Ok(content) = tokio::fs::read_to_string(entry.path()).await {
-                if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if msg["publicKey"].as_str() == Some(pubkey_hex) {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    // Check keyring and legacy trusted_keys
     if let Some(config) = store.config().await {
         if config.keyring.iter().any(|k| k.name == name && k.signing_key == pubkey_hex) {
             return true;
