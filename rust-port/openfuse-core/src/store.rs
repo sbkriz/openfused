@@ -500,10 +500,16 @@ impl ContextStore {
         let archive_dir = inbox_dir.join(".read");
         fs::create_dir_all(&archive_dir)?;
         let src = inbox_dir.join(base);
-        let dst = archive_dir.join(base);
         if !src.exists() {
             anyhow::bail!("Message not found: {}", base);
         }
+        // Path traversal defense: verify resolved path stays under inbox/
+        let resolved = src.canonicalize()?;
+        let inbox_canon = inbox_dir.canonicalize()?;
+        if !resolved.starts_with(&inbox_canon) {
+            anyhow::bail!("Path traversal blocked: {}", filename);
+        }
+        let dst = archive_dir.join(base);
         fs::rename(&src, &dst)?;
         Ok(())
     }
