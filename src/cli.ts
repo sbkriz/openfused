@@ -9,7 +9,7 @@ import * as registry from "./registry.js";
 import { fingerprint } from "./crypto.js";
 import { resolve, join } from "node:path";
 import { readFile } from "node:fs/promises";
-import { parseValiditySections, buildValidityReport } from "./validity.js";
+import { WasmCore } from "./wasm-core.js";
 
 import { createRequire } from "node:module";
 const VERSION = createRequire(import.meta.url)("../package.json").version;
@@ -327,21 +327,8 @@ program
     let prunedCount = 0;
 
     if (opts.pruneStale) {
-      // Soft-expiry pruning: rewrite CONTEXT.md with stale sections stripped
-      const content = await store.readContext();
-      const sections = parseValiditySections(content);
-      const staleSections = sections.filter((s) => s.expired);
-
-      if (staleSections.length > 0) {
-        // Remove stale annotated sections from file
-        let updated = content;
-        for (const s of staleSections) {
-          // Strip the section text from the file (simple text removal)
-          updated = updated.replace(s.sectionText, "[STALE — archived by openfuse compact --prune-stale]");
-        }
-        await store.writeContext(updated);
-        prunedCount = staleSections.length;
-      }
+      const core = new WasmCore(resolve(opts.dir));
+      prunedCount = await core.pruneStale();
     }
 
     const { moved, kept } = await store.compactContext();
@@ -367,31 +354,31 @@ program
       console.error("No context store found. Run `openfuse init` first.");
       process.exit(1);
     }
-    const content = await store.readContext();
-    const sections = parseValiditySections(content);
-    const report = buildValidityReport(sections);
+    const core = new WasmCore(resolve(opts.dir));
+    const report = await core.validate();
 
     if (opts.json) {
       console.log(JSON.stringify(report, null, 2));
       return;
     }
 
-    if (report.total === 0) {
+    const total = report.entries.length;
+    if (total === 0) {
       console.log("No validity-annotated sections found.");
       console.log("Add `<!-- validity: 6h -->` before time-sensitive context entries.");
       return;
     }
 
-    console.log(`Validity check: ${report.fresh} fresh, ${report.stale} stale (of ${report.total} annotated)`);
+    console.log(`Validity check: ${report.fresh} fresh, ${report.stale} stale (of ${total} annotated)`);
     if (report.stale > 0) {
-      console.log("\nStale sections (confidence < 0.1):");
+      console.log("\nStale sections (confidence < 0.5):");
       for (const e of report.entries.filter((e) => e.expired)) {
-        const age = e.addedAt ? ` written ${e.addedAt}` : "";
-        console.log(`  [${e.ttlLabel} TTL${age}] ${e.preview}`);
+        const age = e.added ? ` written ${e.added}` : "";
+        console.log(`  [${e.ttl_str} TTL${age}] ${e.header}`);
       }
       console.log("\nRun `openfuse compact --prune-stale` to archive stale sections.");
     } else {
-      console.log("All annotated sections are within their validity windows. ✓");
+      console.log("All annotated sections are within their validity windows.");
     }
   });
 

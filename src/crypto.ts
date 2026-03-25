@@ -1,18 +1,11 @@
-// --- Why Ed25519 + age? ---
-// Ed25519: fast, deterministic, no padding oracle attacks, widely supported (SSH, FIDO2, libsodium).
-// age over PGP: simpler API, no config footguns, no Web of Trust baggage — just X25519+ChaCha20-Poly1305.
-// Two separate keypairs because signing (Ed25519) and encryption (X25519) are distinct operations;
-// combining them would violate key-separation best practice.
+// Crypto module — delegates to Rust WASM core for all operations.
+// Keeps the same public API so cli.ts, sync.ts, watch.ts, registry.ts don't change.
 
-import { generateKeyPairSync, sign, verify, createPrivateKey, createPublicKey, createHash } from "node:crypto";
-import { readFile, writeFile, mkdir, chmod } from "node:fs/promises";
-import { join } from "node:path";
-import { existsSync } from "node:fs";
-import { Encrypter, Decrypter, generateIdentity, identityToRecipient } from "age-encryption";
+import { WasmCore } from "./wasm-core.js";
 
 const KEY_DIR = ".keys";
 
-// --- Types ---
+// --- Types (re-exported for consumers) ---
 
 export interface SignedMessage {
   from: string;
@@ -20,7 +13,7 @@ export interface SignedMessage {
   message: string;
   signature: string;
   publicKey: string;
-  encryptionKey?: string;  // sender's age public key — lets recipient encrypt replies
+  encryptionKey?: string;
   encrypted?: boolean;
 }
 
@@ -37,39 +30,22 @@ export interface KeyringEntry {
 // --- Key generation ---
 
 export async function generateKeys(storeRoot: string): Promise<{ publicKey: string; encryptionKey: string }> {
-  const keyDir = join(storeRoot, KEY_DIR);
-  await mkdir(keyDir, { recursive: true });
-
-  // Ed25519 signing keypair
-  const { publicKey: pubObj, privateKey: privObj } = generateKeyPairSync("ed25519");
-  const pubJwk = pubObj.export({ format: "jwk" }) as { x: string };
-  const privJwk = privObj.export({ format: "jwk" }) as { d: string; x: string };
-
-  const publicHex = Buffer.from(pubJwk.x, "base64url").toString("hex");
-  const privateHex = Buffer.from(privJwk.d, "base64url").toString("hex");
-
-  await writeFile(join(keyDir, "public.key"), publicHex, { mode: 0o644 });
-  await writeFile(join(keyDir, "private.key"), privateHex, { mode: 0o600 });
-
-  // age encryption keypair
-  const ageIdentity = await generateIdentity();
-  const ageRecipient = await identityToRecipient(ageIdentity);
-
-  await writeFile(join(keyDir, "age.key"), ageIdentity, { mode: 0o600 });
-  await writeFile(join(keyDir, "age.pub"), ageRecipient, { mode: 0o644 });
-
-  return { publicKey: publicHex, encryptionKey: ageRecipient };
+  const core = new WasmCore(storeRoot);
+  return core.generateKeys();
 }
 
 export async function hasKeys(storeRoot: string): Promise<boolean> {
+  const { existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
   return existsSync(join(storeRoot, KEY_DIR, "private.key"));
 }
 
 // --- Fingerprint ---
-// SHA-256 truncated to 16 bytes, displayed as colon-separated hex pairs (GPG-style).
-// Human-readable so agents can verify identities out-of-band — same UX as SSH fingerprints.
 
 export function fingerprint(publicKey: string): string {
+  // Fingerprint is pure computation — fast enough to call WASM synchronously
+  // But node:wasi is async, so we use the same JS implementation for sync callers
+  const { createHash } = require("node:crypto");
   const hash = createHash("sha256").update(publicKey).digest();
   const pairs: string[] = [];
   for (let i = 0; i < 16; i++) {
@@ -84,56 +60,21 @@ export function fingerprint(publicKey: string): string {
 
 // --- Signing ---
 
-async function loadPrivateKey(storeRoot: string) {
-  const privHex = (await readFile(join(storeRoot, KEY_DIR, "private.key"), "utf-8")).trim();
-  const pubHex = (await readFile(join(storeRoot, KEY_DIR, "public.key"), "utf-8")).trim();
-  const d = Buffer.from(privHex, "hex").toString("base64url");
-  const x = Buffer.from(pubHex, "hex").toString("base64url");
-  return createPrivateKey({ key: { kty: "OKP", crv: "Ed25519", d, x }, format: "jwk" });
-}
-
-async function loadPublicKeyHex(storeRoot: string): Promise<string> {
-  return (await readFile(join(storeRoot, KEY_DIR, "public.key"), "utf-8")).trim();
-}
-
 export async function loadAgeRecipient(storeRoot: string): Promise<string> {
+  const { readFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
   return (await readFile(join(storeRoot, KEY_DIR, "age.pub"), "utf-8")).trim();
 }
 
-async function loadAgeIdentity(storeRoot: string): Promise<string> {
-  return (await readFile(join(storeRoot, KEY_DIR, "age.key"), "utf-8")).trim();
-}
-
-/** Sign a raw challenge string — used for outbox authentication.
- * Returns { signature, publicKey } without the full SignedMessage envelope. */
 export async function signChallenge(storeRoot: string, challenge: string): Promise<{ signature: string; publicKey: string }> {
-  const privateKey = await loadPrivateKey(storeRoot);
-  const publicKey = await loadPublicKeyHex(storeRoot);
-  const signature = sign(null, Buffer.from(challenge), privateKey).toString("base64");
-  return { signature, publicKey };
+  const core = new WasmCore(storeRoot);
+  return core.signChallenge(challenge);
 }
 
 export async function signMessage(storeRoot: string, from: string, message: string): Promise<SignedMessage> {
-  const privateKey = await loadPrivateKey(storeRoot);
-  const publicKey = await loadPublicKeyHex(storeRoot);
-  const timestamp = new Date().toISOString();
-
-  const payload = Buffer.from(`${from}\n${timestamp}\n${message}`);
-  const signature = sign(null, payload, privateKey).toString("base64");
-
-  // Include our age public key so recipients can encrypt replies without DNS lookup
-  let encryptionKey: string | undefined;
-  try { encryptionKey = await loadAgeRecipient(storeRoot); } catch {}
-
-  return { from, timestamp, message, signature, publicKey, encryptionKey, encrypted: false };
+  const core = new WasmCore(storeRoot);
+  return core.signMessage(from, message);
 }
-
-// --- Encrypt-then-sign ---
-// Encrypt first, then sign the ciphertext. This order matters:
-// 1. Proves WHO sent the ciphertext (non-repudiation on the encrypted blob)
-// 2. Prevents Surreptitious Forwarding — signature covers the encrypted form,
-//    so a relay can't strip the signature and re-sign for a different recipient.
-// 3. Signature is verifiable by anyone without needing the decryption key.
 
 export async function signAndEncrypt(
   storeRoot: string,
@@ -141,24 +82,15 @@ export async function signAndEncrypt(
   plaintext: string,
   recipientAgeKey: string,
 ): Promise<SignedMessage> {
-  const ciphertext = await ageEncrypt(plaintext, recipientAgeKey);
-  const encoded = Buffer.from(ciphertext).toString("base64");
-
-  const privateKey = await loadPrivateKey(storeRoot);
-  const publicKey = await loadPublicKeyHex(storeRoot);
-  const timestamp = new Date().toISOString();
-
-  const payload = Buffer.from(`${from}\n${timestamp}\n${encoded}`);
-  const signature = sign(null, payload, privateKey).toString("base64");
-
-  let encryptionKey: string | undefined;
-  try { encryptionKey = await loadAgeRecipient(storeRoot); } catch {}
-
-  return { from, timestamp, message: encoded, signature, publicKey, encryptionKey, encrypted: true };
+  const core = new WasmCore(storeRoot);
+  return core.signAndEncrypt(from, plaintext, recipientAgeKey);
 }
 
 export function verifyMessage(signed: SignedMessage): boolean {
+  // Verification is sync in the TS API — keep using Node.js crypto for this
+  // since WASM calls are async. This is pure math, no keys needed.
   try {
+    const { verify, createPublicKey } = require("node:crypto");
     const payload = Buffer.from(`${signed.from}\n${signed.timestamp}\n${signed.message}`);
     const x = Buffer.from(signed.publicKey.trim(), "hex").toString("base64url");
     const pubKey = createPublicKey({ key: { kty: "OKP", crv: "Ed25519", x }, format: "jwk" });
@@ -170,28 +102,11 @@ export function verifyMessage(signed: SignedMessage): boolean {
 
 export async function decryptMessage(storeRoot: string, signed: SignedMessage): Promise<string> {
   if (!signed.encrypted) return signed.message;
-  const ciphertext = Buffer.from(signed.message, "base64");
-  return await ageDecrypt(ciphertext, storeRoot);
-}
-
-// --- age encryption ---
-
-async function ageEncrypt(plaintext: string, recipientKey: string): Promise<Uint8Array> {
-  const e = new Encrypter();
-  e.addRecipient(recipientKey);
-  return await e.encrypt(plaintext);
-}
-
-async function ageDecrypt(ciphertext: Uint8Array, storeRoot: string): Promise<string> {
-  const identity = await loadAgeIdentity(storeRoot);
-  const d = new Decrypter();
-  d.addIdentity(identity);
-  return await d.decrypt(ciphertext, "text");
+  const core = new WasmCore(storeRoot);
+  return core.decryptMessage(signed as any);
 }
 
 // --- Helpers ---
-// XML envelope wrapping — gives LLMs a structured, parseable format with clear
-// trust signals (verified/UNVERIFIED). HTML-escaped to prevent injection into prompts.
 
 export function wrapExternalMessage(signed: SignedMessage, verified: boolean): string {
   const status = verified ? "verified" : "UNVERIFIED";
