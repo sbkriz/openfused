@@ -205,7 +205,8 @@ impl ContextStore {
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
             std::fs::write(&task_path, task_json)?;
 
-            lock_file.unlock()?;
+            // lock_file is dropped here, releasing the flock automatically.
+            // No explicit unlock() — ensures lock is released even on panic.
             Ok(task)
         })
         .await
@@ -387,7 +388,22 @@ impl ContextStore {
                 .and_then(|m| chrono::DateTime::parse_from_rfc3339(&m.updated_at).ok());
             if let Some(ts) = updated {
                 if ts < cutoff {
-                    if fs::remove_dir_all(entry.path()).await.is_ok() {
+                    // Verify path stays under tasks/ before deleting (defense
+                    // against symlink traversal in remove_dir_all).
+                    let dir = entry.path();
+                    let canonical = match dir.canonicalize() {
+                        Ok(p) => p,
+                        Err(_) => continue,
+                    };
+                    let tasks_canonical = match tasks_dir.canonicalize() {
+                        Ok(p) => p,
+                        Err(_) => continue,
+                    };
+                    if !canonical.starts_with(&tasks_canonical) {
+                        tracing::warn!("GC: skipping {} — resolves outside tasks/", dir.display());
+                        continue;
+                    }
+                    if fs::remove_dir_all(&dir).await.is_ok() {
                         removed += 1;
                         tracing::info!(
                             "GC: removed task {} (state={}, updated={})",

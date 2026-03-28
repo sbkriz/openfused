@@ -35,6 +35,8 @@ pub struct AppState {
     pub store: Arc<ContextStore>,
     pub token: Option<String>,
     pub rate_limiter: Option<Arc<RateLimiter>>,
+    /// Only trust X-Forwarded-For when behind a known reverse proxy.
+    pub trust_proxy: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -67,6 +69,15 @@ impl RateLimiter {
         entry.push(now);
         true
     }
+
+    /// Evict stale entries to prevent unbounded memory growth.
+    pub fn sweep(&self) {
+        let now = Instant::now();
+        self.requests.retain(|_, v| {
+            v.retain(|t| now.duration_since(*t) < self.window);
+            !v.is_empty()
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -81,6 +92,7 @@ pub async fn serve(
     token: Option<String>,
     rate_limit: u32,
     gc_days: u32,
+    trust_proxy: bool,
 ) {
     let store = Arc::new(ContextStore::new(store_path));
 
@@ -93,6 +105,7 @@ pub async fn serve(
     let state = AppState {
         store: store.clone(),
         token: token.clone(),
+        trust_proxy,
         rate_limiter,
     };
 
@@ -198,6 +211,17 @@ pub async fn serve(
         tracing::info!("Task GC: cleaning tasks older than {} days (every 6h)", gc_days);
     }
 
+    // Rate limiter sweep: evict stale entries every 5 minutes to prevent memory growth.
+    if let Some(ref limiter) = state.rate_limiter {
+        let sweep_limiter = limiter.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                sweep_limiter.sweep();
+            }
+        });
+    }
+
     let addr = format!("{}:{}", bind, port);
     tracing::info!("OpenFuse daemon listening on {}", addr);
 
@@ -268,13 +292,18 @@ fn check_rate_limit(
         return None;
     };
 
-    // Use X-Forwarded-For if behind a reverse proxy, otherwise use peer IP
-    let ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| addr.ip().to_string());
+    // Only trust X-Forwarded-For when --trust-proxy is set. Without it,
+    // any client can spoof the header to bypass rate limiting.
+    let ip = if state.trust_proxy {
+        headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(',').next())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| addr.ip().to_string())
+    } else {
+        addr.ip().to_string()
+    };
 
     if !limiter.check(&ip) {
         return Some((
@@ -794,6 +823,13 @@ fn build_sse_stream(
                     let _ = tx.send(Ok(ev)).await;
                     return;
                 }
+            } else {
+                // Task was deleted (GC or manual). Close the stream.
+                let ev = SseEvent::default()
+                    .event("error")
+                    .data(r#"{"reason":"task deleted"}"#);
+                let _ = tx.send(Ok(ev)).await;
+                return;
             }
         }
     });

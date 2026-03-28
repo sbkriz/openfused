@@ -47,6 +47,11 @@ enum Commands {
         /// Auto-delete completed/failed/canceled tasks older than N days (0 to disable). Default: 7.
         #[arg(long, default_value_t = 7)]
         gc_days: u32,
+
+        /// Trust X-Forwarded-For header for rate limiting (only when behind a reverse proxy).
+        /// Without this, rate limiting always uses the direct peer IP.
+        #[arg(long)]
+        trust_proxy: bool,
     },
 }
 
@@ -64,6 +69,7 @@ async fn main() {
             token,
             rate_limit,
             gc_days,
+            trust_proxy,
         } => {
             let store_path = store.canonicalize().unwrap_or(store);
             tracing::info!(
@@ -72,7 +78,7 @@ async fn main() {
                 bind,
                 port
             );
-            server::serve(store_path, &bind, port, public, token, rate_limit, gc_days).await;
+            server::serve(store_path, &bind, port, public, token, rate_limit, gc_days, trust_proxy).await;
         }
     }
 }
