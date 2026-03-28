@@ -1,57 +1,132 @@
 use axum::{
-    extract::{DefaultBodyLimit, Path, State},
-    http::StatusCode,
+    extract::{ConnectInfo, DefaultBodyLimit, Path, State},
+    http::{Request, StatusCode},
+    middleware::Next,
     response::{
         sse::{Event as SseEvent, KeepAlive, Sse},
-        Json,
+        IntoResponse, Json, Response,
     },
     routing::{delete, get, post},
     Router,
 };
+use dashmap::DashMap;
+use subtle::ConstantTimeEq;
 use tokio_stream::wrappers::ReceiverStream;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::store::ContextStore;
 use crate::types::*;
 
 // ---------------------------------------------------------------------------
+// Shared app state
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+pub struct AppState {
+    pub store: Arc<ContextStore>,
+    pub token: Option<String>,
+    pub rate_limiter: Option<Arc<RateLimiter>>,
+}
+
+// ---------------------------------------------------------------------------
+// Rate limiter
+// ---------------------------------------------------------------------------
+
+pub struct RateLimiter {
+    requests: DashMap<String, Vec<Instant>>,
+    max_requests: u32,
+    window: std::time::Duration,
+}
+
+impl RateLimiter {
+    pub fn new(max_requests: u32) -> Self {
+        Self {
+            requests: DashMap::new(),
+            max_requests,
+            window: std::time::Duration::from_secs(60),
+        }
+    }
+
+    /// Returns true if the request is allowed, false if rate limited.
+    pub fn check(&self, key: &str) -> bool {
+        let now = Instant::now();
+        let mut entry = self.requests.entry(key.to_string()).or_default();
+        entry.retain(|t| now.duration_since(*t) < self.window);
+        if entry.len() >= self.max_requests as usize {
+            return false;
+        }
+        entry.push(now);
+        true
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Server setup
 // ---------------------------------------------------------------------------
 
-/// Two serving modes: "public" exposes only PROFILE.md + inbox (safe for the open
-/// internet), while "full" also serves CONTEXT.md, shared/, and knowledge/ (for
-/// trusted LAN peers).
-pub async fn serve(store_path: PathBuf, bind: &str, port: u16, public: bool) {
+pub async fn serve(
+    store_path: PathBuf,
+    bind: &str,
+    port: u16,
+    public: bool,
+    token: Option<String>,
+    rate_limit: u32,
+    gc_days: u32,
+) {
     let store = Arc::new(ContextStore::new(store_path));
 
+    let rate_limiter = if rate_limit > 0 {
+        Some(Arc::new(RateLimiter::new(rate_limit)))
+    } else {
+        None
+    };
+
+    let state = AppState {
+        store: store.clone(),
+        token: token.clone(),
+        rate_limiter,
+    };
+
+    // A2A routes — protected by bearer token auth (if configured)
+    let a2a_routes = Router::new()
+        .route("/message/send", post(send_message))
+        .route("/message/stream", post(stream_message))
+        .route("/tasks", get(list_tasks))
+        .route("/tasks/{id}", get(get_task))
+        .route("/tasks/{id}/cancel", post(cancel_task))
+        .route("/tasks/{id}/subscribe", post(subscribe_task))
+        .route("/tasks/{id}/status", post(update_task_status_handler))
+        .route("/tasks/{id}/artifacts", post(create_artifact_handler));
+
+    // Apply bearer auth middleware if token is configured
+    let a2a_routes = if token.is_some() {
+        a2a_routes.layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            bearer_auth_middleware,
+        ))
+    } else {
+        a2a_routes
+    };
+
+    // Build main router
     let mut app = Router::new()
-        // Core routes (always available)
+        // Public routes (no auth — discovery must work without credentials)
         .route("/", get(root))
         .route("/.well-known/agent-card.json", get(get_agent_card))
         .route("/config", get(get_config))
         .route("/profile", get(get_profile))
-        // A2A facade routes
-        // SECURITY: These routes are currently UNAUTHENTICATED. Before exposing
-        // to untrusted networks, add bearer token auth or signed-request verification.
-        // See A2A_COMPATIBILITY_DRAFT.md § Auth Model for the planned approach.
-        .route("/message/send", post(send_message))
-        .route("/tasks", get(list_tasks))
-        .route("/tasks/{id}", get(get_task))
-        .route("/tasks/{id}/cancel", post(cancel_task))
-        // A2A streaming routes
-        .route("/message/stream", post(stream_message))
-        .route("/tasks/{id}/subscribe", post(subscribe_task))
-        // OpenFuse extension routes (any agent can update tasks via HTTP)
-        .route("/tasks/{id}/status", post(update_task_status_handler))
-        .route("/tasks/{id}/artifacts", post(create_artifact_handler))
-        // Native OpenFused routes
+        // A2A routes (auth'd if token set)
+        .merge(a2a_routes)
+        // Native OpenFused routes (own Ed25519 sig auth)
         .route("/inbox", post(receive_inbox))
         .route("/outbox/{name}", get(get_outbox))
         .route("/outbox/{name}/{*filepath}", delete(ack_outbox));
@@ -84,22 +159,135 @@ pub async fn serve(store_path: PathBuf, bind: &str, port: u16, public: bool) {
                 ])
                 .allow_headers([
                     axum::http::header::CONTENT_TYPE,
+                    axum::http::header::AUTHORIZATION,
                     "X-OpenFuse-PublicKey".parse().unwrap(),
                     "X-OpenFuse-Signature".parse().unwrap(),
                     "X-OpenFuse-Timestamp".parse().unwrap(),
                 ]),
         )
-        .with_state(store);
+        .with_state(state.clone());
 
-    // SECURITY: A2A routes have no authentication yet. Warn loudly.
-    tracing::warn!("A2A routes (/message/*, /tasks/*) are UNAUTHENTICATED");
-    tracing::warn!("Do not expose to untrusted networks without adding bearer token auth");
+    // Auth status logging
+    if token.is_some() {
+        tracing::info!("A2A routes protected by bearer token (--token / OPENFUSE_TOKEN)");
+    } else {
+        tracing::warn!("A2A routes (/message/*, /tasks/*) are UNAUTHENTICATED");
+        tracing::warn!("Do not expose to untrusted networks without --token or OPENFUSE_TOKEN");
+    }
+
+    if rate_limit > 0 {
+        tracing::info!("Rate limiting: {} requests/min per IP on task creation", rate_limit);
+    }
+
+    // Task garbage collection background task
+    if gc_days > 0 {
+        let gc_store = store.clone();
+        let max_age = chrono::Duration::days(gc_days as i64);
+        tokio::spawn(async move {
+            // Initial delay: 60s after startup
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            loop {
+                let removed = gc_store.gc_tasks(max_age).await;
+                if removed > 0 {
+                    tracing::info!("GC: removed {} expired tasks", removed);
+                }
+                // Run every 6 hours
+                tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
+            }
+        });
+        tracing::info!("Task GC: cleaning tasks older than {} days (every 6h)", gc_days);
+    }
 
     let addr = format!("{}:{}", bind, port);
     tracing::info!("OpenFuse daemon listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Bearer auth middleware
+// ---------------------------------------------------------------------------
+
+async fn bearer_auth_middleware(
+    State(state): State<AppState>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let Some(ref expected_token) = state.token else {
+        return next.run(request).await;
+    };
+
+    let auth_header = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+
+    let provided_token = auth_header
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .unwrap_or("");
+
+    // Constant-time comparison to prevent timing attacks
+    let expected_bytes = expected_token.as_bytes();
+    let provided_bytes = provided_token.as_bytes();
+    let is_valid = expected_bytes.len() == provided_bytes.len()
+        && expected_bytes.ct_eq(provided_bytes).into();
+
+    if !is_valid {
+        return (
+            StatusCode::UNAUTHORIZED,
+            [(axum::http::header::WWW_AUTHENTICATE, "Bearer")],
+            Json(ProblemDetail {
+                r#type: "about:blank".to_string(),
+                title: "Unauthorized".to_string(),
+                status: 401,
+                detail: Some("Missing or invalid bearer token".to_string()),
+            }),
+        )
+            .into_response();
+    }
+
+    next.run(request).await
+}
+
+// ---------------------------------------------------------------------------
+// Rate limit middleware (applied inline in handlers)
+// ---------------------------------------------------------------------------
+
+fn check_rate_limit(
+    state: &AppState,
+    addr: &SocketAddr,
+    headers: &axum::http::HeaderMap,
+) -> Option<(StatusCode, Json<ProblemDetail>)> {
+    let Some(ref limiter) = state.rate_limiter else {
+        return None;
+    };
+
+    // Use X-Forwarded-For if behind a reverse proxy, otherwise use peer IP
+    let ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| addr.ip().to_string());
+
+    if !limiter.check(&ip) {
+        return Some((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ProblemDetail {
+                r#type: "about:blank".to_string(),
+                title: "Too Many Requests".to_string(),
+                status: 429,
+                detail: Some("Rate limit exceeded. Try again later.".to_string()),
+            }),
+        ));
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -107,16 +295,13 @@ pub async fn serve(store_path: PathBuf, bind: &str, port: u16, public: bool) {
 // ---------------------------------------------------------------------------
 
 async fn root() -> &'static str {
-    concat!(
-        "openfused v",
-        env!("CARGO_PKG_VERSION"),
-        " — agent messaging daemon (A2A compatible)"
-    )
+    "OpenFused — file-native shared memory and signed messaging for AI agents. https://openfused.dev"
 }
 
 async fn get_config(
-    State(store): State<Arc<ContextStore>>,
+    State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    let store = &state.store;
     let config = store.config().await.ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(serde_json::json!({
         "id": config.id,
@@ -127,7 +312,7 @@ async fn get_config(
 }
 
 async fn get_profile(
-    State(store): State<Arc<ContextStore>>,
+    State(state): State<AppState>,
 ) -> Result<
     (
         StatusCode,
@@ -136,6 +321,7 @@ async fn get_profile(
     ),
     StatusCode,
 > {
+    let store = &state.store;
     let body = store
         .read_file("PROFILE.md")
         .await
@@ -155,9 +341,10 @@ async fn get_profile(
 // ---------------------------------------------------------------------------
 
 async fn get_agent_card(
-    State(store): State<Arc<ContextStore>>,
+    State(state): State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> Result<Json<AgentCard>, StatusCode> {
+    let store = &state.store;
     let config = store.config().await.ok_or(StatusCode::NOT_FOUND)?;
     let profile = store.read_profile_text().await.unwrap_or_default();
     let base_url = external_base_url(&headers)
@@ -222,9 +409,16 @@ async fn get_agent_card(
 // ---------------------------------------------------------------------------
 
 async fn send_message(
-    State(store): State<Arc<ContextStore>>,
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
     Json(request): Json<SendMessageRequest>,
 ) -> Result<(StatusCode, Json<SendMessageResponse>), (StatusCode, Json<ProblemDetail>)> {
+    let store = &state.store;
+    // Rate limit task creation
+    if let Some(err) = check_rate_limit(&state, &addr, &headers) {
+        return Err(err);
+    }
     // Validate parts
     if request.message.parts.is_empty() {
         return Err((
@@ -311,16 +505,18 @@ async fn send_message(
 // ---------------------------------------------------------------------------
 
 async fn list_tasks(
-    State(store): State<Arc<ContextStore>>,
+    State(state): State<AppState>,
 ) -> Json<ListTasksResponse> {
+    let store = &state.store;
     let tasks = store.list_tasks().await;
     Json(ListTasksResponse { tasks })
 }
 
 async fn get_task(
-    State(store): State<Arc<ContextStore>>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<TaskRecord>, (StatusCode, Json<ProblemDetail>)> {
+    let store = &state.store;
     let task = store.read_task(&id).await.ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
@@ -335,9 +531,10 @@ async fn get_task(
 // ---------------------------------------------------------------------------
 
 async fn cancel_task(
-    State(store): State<Arc<ContextStore>>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<TaskRecord>, (StatusCode, Json<ProblemDetail>)> {
+    let store = &state.store;
     let cancel_status = TaskStatus {
         state: task_state::CANCELED.to_string(),
         message: None,
@@ -370,10 +567,11 @@ async fn cancel_task(
 
 /// POST /tasks/{id}/status — lets any agent update a task's status via HTTP.
 async fn update_task_status_handler(
-    State(store): State<Arc<ContextStore>>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
     Json(request): Json<UpdateTaskStatusRequest>,
 ) -> Result<Json<TaskRecord>, (StatusCode, Json<ProblemDetail>)> {
+    let store = &state.store;
     // Validate state is a known A2A task state.
     if !task_state::is_valid(&request.status.state) {
         return Err((
@@ -407,10 +605,11 @@ async fn update_task_status_handler(
 
 /// POST /tasks/{id}/artifacts — lets any agent attach an artifact to a task.
 async fn create_artifact_handler(
-    State(store): State<Arc<ContextStore>>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
     Json(request): Json<CreateArtifactRequest>,
 ) -> Result<(StatusCode, Json<TaskRecord>), (StatusCode, Json<ProblemDetail>)> {
+    let store = &state.store;
     let task = store
         .write_artifact(&id, request.artifact)
         .await
@@ -435,10 +634,17 @@ async fn create_artifact_handler(
 
 /// POST /message:stream — create a task and stream events via SSE.
 async fn stream_message(
-    State(store): State<Arc<ContextStore>>,
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
     Json(request): Json<SendMessageRequest>,
 ) -> Result<Sse<impl tokio_stream::Stream<Item = Result<SseEvent, std::convert::Infallible>>>, (StatusCode, Json<ProblemDetail>)>
 {
+    let store = &state.store;
+    // Rate limit task creation
+    if let Some(err) = check_rate_limit(&state, &addr, &headers) {
+        return Err(err);
+    }
     // Validate
     if request.message.parts.is_empty() {
         return Err((
@@ -496,15 +702,16 @@ async fn stream_message(
         .join("events.ndjson");
     let task_snapshot = task.clone();
 
-    Ok(build_sse_stream(store, events_path, task_snapshot))
+    Ok(build_sse_stream(store.clone(), events_path, task_snapshot))
 }
 
 /// POST /tasks/{id}/subscribe — subscribe to an existing task's events via SSE.
 async fn subscribe_task(
-    State(store): State<Arc<ContextStore>>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Sse<impl tokio_stream::Stream<Item = Result<SseEvent, std::convert::Infallible>>>, (StatusCode, Json<ProblemDetail>)>
 {
+    let store = &state.store;
     // read_task sanitizes the ID internally; use the returned task.id for the path
     // to prevent path traversal via URL-encoded characters in the raw `id`.
     let task = store.read_task(&id).await.ok_or_else(|| {
@@ -514,7 +721,7 @@ async fn subscribe_task(
     let events_path = store.root.join("tasks").join(&task.id).join("events.ndjson");
     let task_snapshot = task;
 
-    Ok(build_sse_stream(store, events_path, task_snapshot))
+    Ok(build_sse_stream(store.clone(), events_path, task_snapshot))
 }
 
 /// Build an SSE stream from a task snapshot + events.ndjson file tail.
@@ -599,14 +806,16 @@ fn build_sse_stream(
 // Full-mode file serving (trusted LAN only)
 // ---------------------------------------------------------------------------
 
-async fn list_root(State(store): State<Arc<ContextStore>>) -> Json<Vec<FileEntry>> {
+async fn list_root(State(state): State<AppState>) -> Json<Vec<FileEntry>> {
+    let store = &state.store;
     Json(store.list_root().await)
 }
 
 async fn list_dir(
-    State(store): State<Arc<ContextStore>>,
+    State(state): State<AppState>,
     Path(path): Path<String>,
 ) -> Result<Json<Vec<FileEntry>>, StatusCode> {
+    let store = &state.store;
     if !["shared", "knowledge"].contains(&path.as_str()) {
         return Err(StatusCode::FORBIDDEN);
     }
@@ -614,9 +823,10 @@ async fn list_dir(
 }
 
 async fn read_file(
-    State(store): State<Arc<ContextStore>>,
+    State(state): State<AppState>,
     Path(path): Path<String>,
 ) -> Result<Vec<u8>, StatusCode> {
+    let store = &state.store;
     store.read_file(&path).await.ok_or(StatusCode::NOT_FOUND)
 }
 
@@ -626,9 +836,10 @@ async fn read_file(
 
 /// Receive a signed message into the inbox.
 async fn receive_inbox(
-    State(store): State<Arc<ContextStore>>,
+    State(state): State<AppState>,
     body: String,
 ) -> Result<StatusCode, StatusCode> {
+    let store = &state.store;
     let msg: serde_json::Value =
         serde_json::from_str(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -665,10 +876,11 @@ async fn receive_inbox(
 
 /// Serve outbox messages addressed to a specific agent.
 async fn get_outbox(
-    State(store): State<Arc<ContextStore>>,
+    State(state): State<AppState>,
     Path(name): Path<String>,
     headers: axum::http::HeaderMap,
 ) -> Result<Json<Vec<serde_json::Value>>, StatusCode> {
+    let store = &state.store;
     let safe_name = name.replace(
         |c: char| !c.is_alphanumeric() && c != '-' && c != '_',
         "",
@@ -791,10 +1003,11 @@ async fn get_outbox(
 
 /// ACK a received outbox message.
 async fn ack_outbox(
-    State(store): State<Arc<ContextStore>>,
+    State(state): State<AppState>,
     Path((name, filepath)): Path<(String, String)>,
     headers: axum::http::HeaderMap,
 ) -> Result<StatusCode, StatusCode> {
+    let store = &state.store;
     let safe_name = name.replace(
         |c: char| !c.is_alphanumeric() && c != '-' && c != '_',
         "",

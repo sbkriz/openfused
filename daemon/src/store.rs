@@ -1,3 +1,4 @@
+use fs2::FileExt;
 use std::path::PathBuf;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -174,42 +175,71 @@ impl ContextStore {
         tasks
     }
 
+    /// Execute a read-modify-write on task.json under an exclusive flock.
+    /// Prevents race conditions from concurrent requests to the same task.
+    async fn with_task_lock<F>(
+        &self,
+        id: &str,
+        op: F,
+    ) -> Result<TaskRecord, std::io::Error>
+    where
+        F: FnOnce(&mut TaskRecord) -> Result<(), std::io::Error> + Send + 'static,
+    {
+        let safe_id = sanitize_path_segment(id);
+        validate_path_segment(&safe_id)?;
+        let task_path = self.root.join("tasks").join(&safe_id).join("task.json");
+        let lock_path = self.root.join("tasks").join(&safe_id).join(".task.lock");
+
+        tokio::task::spawn_blocking(move || {
+            let lock_file = std::fs::File::create(&lock_path)?;
+            lock_file.lock_exclusive()?;
+
+            let data = std::fs::read_to_string(&task_path)
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "Task not found"))?;
+            let mut task: TaskRecord = serde_json::from_str(&data)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+            op(&mut task)?;
+
+            let task_json = serde_json::to_vec_pretty(&task)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            std::fs::write(&task_path, task_json)?;
+
+            lock_file.unlock()?;
+            Ok(task)
+        })
+        .await
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+    }
+
     /// Update a task's status. Writes to task.json and appends to events.ndjson.
     pub async fn update_task_status(
         &self,
         id: &str,
         new_status: TaskStatus,
     ) -> Result<TaskRecord, std::io::Error> {
+        let status_clone = new_status.clone();
+        let task = self
+            .with_task_lock(id, move |task| {
+                if task_state::is_terminal(&task.status.state) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("Task is in terminal state: {}", task.status.state),
+                    ));
+                }
+                let now = chrono::Utc::now().to_rfc3339();
+                task.status = status_clone;
+                if let Some(ref mut meta) = task.openfuse {
+                    meta.updated_at = now;
+                }
+                Ok(())
+            })
+            .await?;
+
+        // Append event outside lock (O_APPEND is atomic)
         let safe_id = sanitize_path_segment(id);
-        let task_path = self.root.join("tasks").join(&safe_id).join("task.json");
-
-        let data = fs::read_to_string(&task_path)
-            .await
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "Task not found"))?;
-        let mut task: TaskRecord = serde_json::from_str(&data)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-
-        // Don't allow transitions from terminal states.
-        if task_state::is_terminal(&task.status.state) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Task is in terminal state: {}", task.status.state),
-            ));
-        }
-
-        let now = chrono::Utc::now().to_rfc3339();
-        task.status = new_status.clone();
-        if let Some(ref mut meta) = task.openfuse {
-            meta.updated_at = now.clone();
-        }
-
-        let task_json = serde_json::to_vec_pretty(&task)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        fs::write(&task_path, task_json).await?;
-
-        // Append status event.
         let event = TaskEvent {
-            timestamp: now,
+            timestamp: chrono::Utc::now().to_rfc3339(),
             kind: "status".to_string(),
             status: Some(new_status),
             artifact: None,
@@ -251,11 +281,10 @@ impl ContextStore {
         artifact: TaskArtifact,
     ) -> Result<TaskRecord, std::io::Error> {
         let safe_id = sanitize_path_segment(id);
-        let task_path = self.root.join("tasks").join(&safe_id).join("task.json");
         let artifacts_dir = self.root.join("tasks").join(&safe_id).join("artifacts");
         fs::create_dir_all(&artifacts_dir).await?;
 
-        // If the artifact has a text part, write it to a file too.
+        // Write artifact file to disk (outside lock — no RMW race here).
         if let Some(name) = &artifact.name {
             let safe_name = sanitize_path_segment(name);
             for part in &artifact.parts {
@@ -266,27 +295,22 @@ impl ContextStore {
             }
         }
 
-        // Update task.json with the new artifact.
-        let data = fs::read_to_string(&task_path)
-            .await
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "Task not found"))?;
-        let mut task: TaskRecord = serde_json::from_str(&data)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        // Update task.json under flock.
+        let artifact_clone = artifact.clone();
+        let task = self
+            .with_task_lock(id, move |task| {
+                let now = chrono::Utc::now().to_rfc3339();
+                if let Some(ref mut meta) = task.openfuse {
+                    meta.updated_at = now;
+                }
+                task.artifacts.push(artifact_clone);
+                Ok(())
+            })
+            .await?;
 
-        let now = chrono::Utc::now().to_rfc3339();
-        if let Some(ref mut meta) = task.openfuse {
-            meta.updated_at = now.clone();
-        }
-
-        task.artifacts.push(artifact.clone());
-
-        let task_json = serde_json::to_vec_pretty(&task)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        fs::write(&task_path, task_json).await?;
-
-        // Append artifact event.
+        // Append event outside lock.
         let event = TaskEvent {
-            timestamp: now,
+            timestamp: chrono::Utc::now().to_rfc3339(),
             kind: "artifact".to_string(),
             status: None,
             artifact: Some(artifact),
@@ -304,36 +328,79 @@ impl ContextStore {
         message: A2AMessage,
     ) -> Result<TaskRecord, std::io::Error> {
         let safe_id = sanitize_path_segment(id);
-        let task_path = self.root.join("tasks").join(&safe_id).join("task.json");
 
-        let data = fs::read_to_string(&task_path)
-            .await
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "Task not found"))?;
-        let mut task: TaskRecord = serde_json::from_str(&data)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let message_clone = message.clone();
+        let task = self
+            .with_task_lock(id, move |task| {
+                let now = chrono::Utc::now().to_rfc3339();
+                if let Some(ref mut meta) = task.openfuse {
+                    meta.updated_at = now;
+                }
+                task.history.push(message_clone);
+                Ok(())
+            })
+            .await?;
 
-        let now = chrono::Utc::now().to_rfc3339();
-        if let Some(ref mut meta) = task.openfuse {
-            meta.updated_at = now.clone();
-        }
-
-        // Append message event.
+        // Append event outside lock.
         let event = TaskEvent {
-            timestamp: now,
+            timestamp: chrono::Utc::now().to_rfc3339(),
             kind: "message".to_string(),
             status: None,
             artifact: None,
-            message: Some(message.clone()),
+            message: Some(message),
         };
         self.append_event(&safe_id, &event).await?;
 
-        task.history.push(message);
-
-        let task_json = serde_json::to_vec_pretty(&task)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        fs::write(&task_path, task_json).await?;
-
         Ok(task)
+    }
+
+    // -----------------------------------------------------------------------
+    // Garbage collection
+    // -----------------------------------------------------------------------
+
+    /// Remove task directories for tasks in terminal state older than `max_age`.
+    pub async fn gc_tasks(&self, max_age: chrono::Duration) -> usize {
+        let tasks_dir = self.root.join("tasks");
+        let cutoff = chrono::Utc::now() - max_age;
+        let mut removed = 0;
+
+        let Ok(mut reader) = fs::read_dir(&tasks_dir).await else {
+            return 0;
+        };
+
+        while let Ok(Some(entry)) = reader.next_entry().await {
+            let task_path = entry.path().join("task.json");
+            let Ok(data) = fs::read_to_string(&task_path).await else {
+                continue;
+            };
+            let Ok(task) = serde_json::from_str::<TaskRecord>(&data) else {
+                continue;
+            };
+
+            if !task_state::is_terminal(&task.status.state) {
+                continue;
+            }
+
+            let updated = task
+                .openfuse
+                .as_ref()
+                .and_then(|m| chrono::DateTime::parse_from_rfc3339(&m.updated_at).ok());
+            if let Some(ts) = updated {
+                if ts < cutoff {
+                    if fs::remove_dir_all(entry.path()).await.is_ok() {
+                        removed += 1;
+                        tracing::info!(
+                            "GC: removed task {} (state={}, updated={})",
+                            task.id,
+                            task.status.state,
+                            ts
+                        );
+                    }
+                }
+            }
+        }
+
+        removed
     }
 
     // -----------------------------------------------------------------------
