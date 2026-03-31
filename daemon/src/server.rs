@@ -84,6 +84,7 @@ pub async fn serve(
         .merge(a2a_routes)
         // Native OpenFused routes (own Ed25519 sig auth)
         .route("/inbox", post(receive_inbox))
+        .route("/inbox/{name}", post(receive_inbox))  // alias for multi-tenant compat
         .route("/outbox/{name}", get(get_outbox))
         .route("/outbox/{name}/{*filepath}", delete(ack_outbox));
 

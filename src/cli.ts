@@ -653,109 +653,124 @@ program
   });
 
 // --- send ---
+// Helper: find the newest outbox file for a recipient
+import { readdirSync, statSync } from "node:fs";
+function findNewestOutboxFile(storeRoot: string, name: string): string {
+  const outboxDir = join(storeRoot, "outbox");
+  try {
+    for (const entry of readdirSync(outboxDir)) {
+      if (entry.startsWith(`${name}-`) && statSync(join(outboxDir, entry)).isDirectory()) {
+        const files = readdirSync(join(outboxDir, entry))
+          .filter((f: string) => f.endsWith(".json"))
+          .sort()
+          .reverse();
+        if (files.length > 0) return join(entry, files[0]);
+      }
+    }
+  } catch {}
+  return "";
+}
+
 program
   .command("send <name> <message>")
-  .description("Send a message to an agent (resolves via registry)")
+  .description("Send a message to an agent (tries local peers first, then registry)")
   .option("-d, --dir <path>", "Context store directory", ".")
   .option("-r, --registry <url>", "Registry URL")
   .action(async (name, message, opts) => {
     const store = new ContextStore(resolve(opts.dir));
     const reg = registry.resolveRegistry(opts.registry);
+    let config = await store.readConfig();
 
-    try {
-      const manifest = await registry.discover(name, reg);
-
-      // Auto-import key + add as peer. Keys are untrusted by default.
-      // Trust is a local decision — use `openfuse key trust <name>` after verifying.
-      const dnsDiscovered = false; // never auto-trust — user must explicitly trust
-      let config = await store.readConfig();
-      if (!config.keyring.some((e) => e.signingKey === manifest.publicKey)) {
-        config.keyring.push({
-          name: manifest.name,
-          address: `${manifest.name}@registry`,
-          signingKey: manifest.publicKey,
-          encryptionKey: manifest.encryptionKey,
-          fingerprint: manifest.fingerprint,
-          trusted: dnsDiscovered,
-          added: new Date().toISOString(),
-        });
-      }
-      if (manifest.endpoint && !config.peers.some((p) => p.name === manifest.name)) {
-        config.peers.push({
-          id: (await import("nanoid")).nanoid(12),
-          name: manifest.name,
-          url: manifest.endpoint,
-          access: "read" as const,
-        });
-      }
-      await store.writeConfig(config);
-
+    // 1. Check if they're a configured local peer — deliver directly
+    const existingPeer = config.peers.find((p) => p.name === name);
+    if (existingPeer) {
       await store.sendInbox(name, message);
-
-      // Find the outbox file we just created — sendInbox returns the peer name,
-      // not the file path. The file is in outbox/{name}-{fp}/*.json.
-      const { readdirSync, statSync } = await import("node:fs");
-      const outboxDir = join(store.root, "outbox");
-      let outboxFile = "";
-      for (const entry of readdirSync(outboxDir)) {
-        if (entry.startsWith(`${name}-`) && statSync(join(outboxDir, entry)).isDirectory()) {
-          const files = readdirSync(join(outboxDir, entry))
-            .filter((f: string) => f.endsWith(".json"))
-            .sort()
-            .reverse();
-          if (files.length > 0) {
-            outboxFile = join(entry, files[0]);
-            break;
-          }
+      // Find the outbox file we just created
+      const outboxFile = findNewestOutboxFile(store.root, name);
+      if (outboxFile) {
+        const delivered = await deliverOne(store, name, outboxFile);
+        if (delivered) {
+          console.log(`Delivered to ${name}.`);
+          return;
         }
       }
+      console.log(`Queued for ${name}. Run \`openfuse sync\` to deliver.`);
+      return;
+    }
 
-      // Try direct HTTP delivery if endpoint is http(s)
-      if (manifest.endpoint.startsWith("http") && outboxFile) {
-        try {
-          // SSRF check: registry endpoints are attacker-controlled
-          const { checkSsrf } = await import("./sync.js");
-          await checkSsrf(manifest.endpoint);
-          const body = await readFile(join(outboxDir, outboxFile), "utf-8");
-          // Append ?to={name} for multi-tenant hosted mailboxes (inbox.openfused.dev).
-          // Self-hosted daemons ignore the query param (single-tenant).
-          const inboxUrl = `${manifest.endpoint.replace(/\/$/, "")}/inbox?to=${encodeURIComponent(name)}`;
-          const r = await fetch(inboxUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body,
-          });
-          if (r.ok) {
-            // Archive to .sent/ within the recipient subdir
-            const { mkdir, rename } = await import("node:fs/promises");
-            const filePath = join(outboxDir, outboxFile);
-            const dir = join(filePath, "..");
-            const sentDir = join(dir, ".sent");
-            const baseName = outboxFile.includes("/") ? outboxFile.split("/").pop()! : outboxFile;
-            await mkdir(sentDir, { recursive: true });
-            await rename(filePath, join(sentDir, baseName));
-            console.log(`Delivered to ${name}.`);
-          } else {
-            console.log(`Queued for ${name}. Endpoint returned ${r.status}. Will deliver on next sync.`);
-          }
-        } catch (e: any) {
-          console.log(`Queued for ${name}. Will deliver on next sync.`);
-          if (process.env.DEBUG) console.error(`  Delivery error: ${e.message}`);
-        }
-      } else if (manifest.endpoint) {
-        console.log(`Queued for ${name}. Run \`openfuse sync\` to deliver.`);
-      } else {
-        console.log(`Queued for ${name}. Key imported but ${name} has no endpoint — they'll need to pull from your outbox, or add a peer URL with \`openfuse peer add\`.`);
-      }
+    // 2. Discover from registry — import key, try HTTP delivery
+    let manifest;
+    try {
+      manifest = await registry.discover(name, reg);
     } catch {
-      // Not in registry — send as a peer message
-      const filename = await store.sendInbox(name, message);
-      const delivered = await deliverOne(store, name, filename);
-      if (delivered) {
-        console.log(`Delivered to ${name}.`);
+      // Not in registry either — just queue it
+      if (config.keyring.some((k) => k.name === name)) {
+        await store.sendInbox(name, message);
+        console.log(`Queued for ${name}. No endpoint found — run \`openfuse sync\` or \`openfuse peer add\`.`);
       } else {
-        console.log(`Queued for ${name}. Run \`openfuse sync\` to deliver.`);
+        console.error(`Agent '${name}' not found in local peers or registry.`);
+        process.exit(1);
       }
+      return;
+    }
+
+    // Auto-import key. Keys are untrusted by default.
+    if (!config.keyring.some((e) => e.signingKey === manifest.publicKey)) {
+      config.keyring.push({
+        name: manifest.name,
+        address: `${manifest.name}@registry`,
+        signingKey: manifest.publicKey,
+        encryptionKey: manifest.encryptionKey,
+        fingerprint: manifest.fingerprint,
+        trusted: false,
+        added: new Date().toISOString(),
+      });
+    }
+    if (manifest.endpoint && !config.peers.some((p) => p.name === manifest.name)) {
+      config.peers.push({
+        id: (await import("nanoid")).nanoid(12),
+        name: manifest.name,
+        url: manifest.endpoint,
+        access: "read" as const,
+      });
+    }
+    await store.writeConfig(config);
+
+    await store.sendInbox(name, message);
+    const outboxFile = findNewestOutboxFile(store.root, name);
+
+    // Try direct HTTP delivery
+    if (manifest.endpoint && manifest.endpoint.startsWith("http") && outboxFile) {
+      try {
+        const { checkSsrf } = await import("./sync.js");
+        await checkSsrf(manifest.endpoint);
+        const body = await readFile(join(store.root, "outbox", outboxFile), "utf-8");
+        const inboxUrl = `${manifest.endpoint.replace(/\/$/, "")}/inbox/${encodeURIComponent(name)}`;
+        const r = await fetch(inboxUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+        if (r.ok) {
+          const { mkdir, rename } = await import("node:fs/promises");
+          const filePath = join(store.root, "outbox", outboxFile);
+          const dir = join(filePath, "..");
+          const sentDir = join(dir, ".sent");
+          const baseName = outboxFile.includes("/") ? outboxFile.split("/").pop()! : outboxFile;
+          await mkdir(sentDir, { recursive: true });
+          await rename(filePath, join(sentDir, baseName));
+          console.log(`Delivered to ${name}.`);
+        } else {
+          console.log(`Queued for ${name}. Endpoint returned ${r.status}. Run \`openfuse sync\` to retry.`);
+        }
+      } catch (e: any) {
+        console.log(`Queued for ${name}. Run \`openfuse sync\` to deliver.`);
+        if (process.env.DEBUG) console.error(`  Delivery error: ${e.message}`);
+      }
+    } else if (manifest.endpoint) {
+      console.log(`Queued for ${name}. Run \`openfuse sync\` to deliver.`);
+    } else {
+      console.log(`Queued for ${name}. ${name} has no endpoint — they'll need to pull from your outbox.`);
     }
   });
 
