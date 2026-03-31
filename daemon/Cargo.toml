@@ -25,7 +25,6 @@ tokio-stream = "0.1"
 notify = "7"
 subtle = "2"
 fs2 = "0.4"
-dashmap = "6"
 
 [profile.release]
 lto = true

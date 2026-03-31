@@ -1,5 +1,5 @@
 use axum::{
-    extract::{ConnectInfo, DefaultBodyLimit, Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::{Request, StatusCode},
     middleware::Next,
     response::{
@@ -9,7 +9,6 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
-use dashmap::DashMap;
 use subtle::ConstantTimeEq;
 use tokio_stream::wrappers::ReceiverStream;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -17,10 +16,8 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::store::ContextStore;
@@ -34,50 +31,6 @@ use crate::types::*;
 pub struct AppState {
     pub store: Arc<ContextStore>,
     pub token: Option<String>,
-    pub rate_limiter: Option<Arc<RateLimiter>>,
-    /// Only trust X-Forwarded-For when behind a known reverse proxy.
-    pub trust_proxy: bool,
-}
-
-// ---------------------------------------------------------------------------
-// Rate limiter
-// ---------------------------------------------------------------------------
-
-pub struct RateLimiter {
-    requests: DashMap<String, Vec<Instant>>,
-    max_requests: u32,
-    window: std::time::Duration,
-}
-
-impl RateLimiter {
-    pub fn new(max_requests: u32) -> Self {
-        Self {
-            requests: DashMap::new(),
-            max_requests,
-            window: std::time::Duration::from_secs(60),
-        }
-    }
-
-    /// Returns true if the request is allowed, false if rate limited.
-    pub fn check(&self, key: &str) -> bool {
-        let now = Instant::now();
-        let mut entry = self.requests.entry(key.to_string()).or_default();
-        entry.retain(|t| now.duration_since(*t) < self.window);
-        if entry.len() >= self.max_requests as usize {
-            return false;
-        }
-        entry.push(now);
-        true
-    }
-
-    /// Evict stale entries to prevent unbounded memory growth.
-    pub fn sweep(&self) {
-        let now = Instant::now();
-        self.requests.retain(|_, v| {
-            v.retain(|t| now.duration_since(*t) < self.window);
-            !v.is_empty()
-        });
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -90,23 +43,13 @@ pub async fn serve(
     port: u16,
     public: bool,
     token: Option<String>,
-    rate_limit: u32,
     gc_days: u32,
-    trust_proxy: bool,
 ) {
     let store = Arc::new(ContextStore::new(store_path));
-
-    let rate_limiter = if rate_limit > 0 {
-        Some(Arc::new(RateLimiter::new(rate_limit)))
-    } else {
-        None
-    };
 
     let state = AppState {
         store: store.clone(),
         token: token.clone(),
-        trust_proxy,
-        rate_limiter,
     };
 
     // A2A routes — protected by bearer token auth (if configured)
@@ -188,10 +131,6 @@ pub async fn serve(
         tracing::warn!("Do not expose to untrusted networks without --token or OPENFUSE_TOKEN");
     }
 
-    if rate_limit > 0 {
-        tracing::info!("Rate limiting: {} requests/min per IP on task creation", rate_limit);
-    }
-
     // Task garbage collection background task
     if gc_days > 0 {
         let gc_store = store.clone();
@@ -211,27 +150,11 @@ pub async fn serve(
         tracing::info!("Task GC: cleaning tasks older than {} days (every 6h)", gc_days);
     }
 
-    // Rate limiter sweep: evict stale entries every 5 minutes to prevent memory growth.
-    if let Some(ref limiter) = state.rate_limiter {
-        let sweep_limiter = limiter.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(300)).await;
-                sweep_limiter.sweep();
-            }
-        });
-    }
-
     let addr = format!("{}:{}", bind, port);
     tracing::info!("OpenFuse daemon listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await
-    .unwrap();
+    axum::serve(listener, app).await.unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -282,42 +205,6 @@ async fn bearer_auth_middleware(
 // ---------------------------------------------------------------------------
 // Rate limit middleware (applied inline in handlers)
 // ---------------------------------------------------------------------------
-
-fn check_rate_limit(
-    state: &AppState,
-    addr: &SocketAddr,
-    headers: &axum::http::HeaderMap,
-) -> Option<(StatusCode, Json<ProblemDetail>)> {
-    let Some(ref limiter) = state.rate_limiter else {
-        return None;
-    };
-
-    // Only trust X-Forwarded-For when --trust-proxy is set. Without it,
-    // any client can spoof the header to bypass rate limiting.
-    let ip = if state.trust_proxy {
-        headers
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split(',').next())
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|| addr.ip().to_string())
-    } else {
-        addr.ip().to_string()
-    };
-
-    if !limiter.check(&ip) {
-        return Some((
-            StatusCode::TOO_MANY_REQUESTS,
-            Json(ProblemDetail {
-                r#type: "about:blank".to_string(),
-                title: "Too Many Requests".to_string(),
-                status: 429,
-                detail: Some("Rate limit exceeded. Try again later.".to_string()),
-            }),
-        ));
-    }
-    None
-}
 
 // ---------------------------------------------------------------------------
 // Core routes
@@ -439,15 +326,9 @@ async fn get_agent_card(
 
 async fn send_message(
     State(state): State<AppState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    headers: axum::http::HeaderMap,
     Json(request): Json<SendMessageRequest>,
 ) -> Result<(StatusCode, Json<SendMessageResponse>), (StatusCode, Json<ProblemDetail>)> {
     let store = &state.store;
-    // Rate limit task creation
-    if let Some(err) = check_rate_limit(&state, &addr, &headers) {
-        return Err(err);
-    }
     // Validate parts
     if request.message.parts.is_empty() {
         return Err((
@@ -664,16 +545,10 @@ async fn create_artifact_handler(
 /// POST /message:stream — create a task and stream events via SSE.
 async fn stream_message(
     State(state): State<AppState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    headers: axum::http::HeaderMap,
     Json(request): Json<SendMessageRequest>,
 ) -> Result<Sse<impl tokio_stream::Stream<Item = Result<SseEvent, std::convert::Infallible>>>, (StatusCode, Json<ProblemDetail>)>
 {
     let store = &state.store;
-    // Rate limit task creation
-    if let Some(err) = check_rate_limit(&state, &addr, &headers) {
-        return Err(err);
-    }
     // Validate
     if request.message.parts.is_empty() {
         return Err((

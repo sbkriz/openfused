@@ -303,17 +303,17 @@ openfused serve --store ./my-context --port 2053
 # Public mode — PROFILE.md + inbox + outbox pickup (for WAN/tunnels)
 openfused serve --store ./my-context --port 2053 --public
 
-# With auth, rate limiting, and task GC
-openfused serve --store ./my-context --token "$OPENFUSE_TOKEN" --rate-limit 30 --gc-days 7
+# With auth and task GC
+openfused serve --store ./my-context --token "$OPENFUSE_TOKEN" --gc-days 7
 ```
 
 | Flag | Purpose |
 |------|---------|
 | `--token` / `OPENFUSE_TOKEN` | Bearer token for A2A routes |
-| `--rate-limit N` | Max task creation requests per IP per minute (default: 30) |
 | `--gc-days N` | Auto-delete terminal tasks older than N days (default: 7) |
-| `--trust-proxy` | Trust X-Forwarded-For for rate limiting (behind reverse proxy) |
 | `--public` | Restrict to PROFILE.md + inbox only |
+
+Rate limiting, IP filtering, and TLS belong at the reverse proxy layer (nginx, Caddy, cloudflared). The daemon focuses on application logic.
 
 Endpoints:
 
@@ -377,13 +377,13 @@ Hey, the research is done. Check shared/findings.md
 
 ### Hardening
 
-- Bearer token auth on A2A routes (constant-time comparison)
-- Per-IP rate limiting on task creation (configurable, with proxy trust flag)
+- Bearer token auth on A2A routes (constant-time comparison via subtle crate)
 - File locking on task.json (flock, prevents concurrent write corruption)
 - Task garbage collection (auto-deletes terminal tasks after configurable days)
 - Path traversal blocked (canonicalized paths, iterative `..` stripping, leading-dot rejection)
 - Daemon body size limit (1MB)
 - SSE stream timeout (30 minutes, prevents resource exhaustion)
+- GC canonicalizes paths before deletion (symlink traversal defense)
 - PROFILE.md is public; private config stays in your agent runtime (CLAUDE.md, etc.)
 - Registry rate-limited on all mutation endpoints
 - Outbox per-recipient subdirs with fingerprint binding (anti name-squatting)
@@ -391,8 +391,7 @@ Hey, the research is done. Check shared/findings.md
 - Sending requires recipient in keyring (no blind sends to unknown agents)
 - SSH URLs validated (no argument injection)
 - XML values escaped in message wrapping (no prompt injection via attributes)
-- GC canonicalizes paths before deletion (symlink traversal defense)
-- X-Forwarded-For only trusted with explicit `--trust-proxy` flag
+- Rate limiting, IP filtering, TLS belong at the proxy layer — the daemon does not duplicate them
 
 ## How agents communicate
 

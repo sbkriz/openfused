@@ -89,14 +89,13 @@
     <table>
       <tr><th>Feature</th><th>Protection</th></tr>
       <tr><td>Bearer token auth</td><td>Constant-time comparison, 401 with WWW-Authenticate on failure</td></tr>
-      <tr><td>Per-IP rate limiting</td><td>Sliding window on task creation (configurable, default 30/min)</td></tr>
       <tr><td>File locking</td><td>flock on task.json prevents concurrent write corruption</td></tr>
       <tr><td>Task GC</td><td>Background cleanup of terminal tasks (configurable, default 7 days)</td></tr>
       <tr><td>SSE timeout</td><td>Streams close after 30 minutes to prevent resource exhaustion</td></tr>
-      <tr><td>Proxy trust</td><td>X-Forwarded-For only honored with explicit <code>--trust-proxy</code> flag</td></tr>
       <tr><td>Path sanitization</td><td>Iterative <code>..</code> stripping, leading-dot rejection, canonicalization</td></tr>
       <tr><td>GC safety</td><td>Canonicalizes task paths before deletion (symlink traversal defense)</td></tr>
     </table>
+    <p>Rate limiting, IP filtering, and TLS are left to your reverse proxy (nginx, Caddy, cloudflared). The daemon focuses on application-layer security — it doesn't duplicate infrastructure that belongs at the network edge.</p>
 
     <h2>Security Reviews</h2>
     <p>The A2A compatibility layer underwent two formal security reviews covering: path traversal, authentication gaps, DoS vectors, race conditions, resource leaks, input validation, information disclosure, and CORS policy. All critical and important findings were addressed before merge.</p>
