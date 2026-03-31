@@ -125,8 +125,6 @@ export async function deliverOne(store: ContextStore, peerName: string, filename
     if (transport.type === "http") {
       await checkSsrf(transport.baseUrl!);
       const body = await readFile(filePath, "utf-8");
-      // Append ?to={name} for multi-tenant hosted mailboxes (inbox.openfused.dev).
-      // Self-hosted daemons ignore the query param (single-tenant).
       const inboxUrl = `${transport.baseUrl}/inbox/${encodeURIComponent(peerName)}`;
       const r = await fetch(inboxUrl, {
         method: "POST",
