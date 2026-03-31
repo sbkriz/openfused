@@ -4,7 +4,7 @@ use std::time::Duration;
 use anyhow::Result;
 use notify::{Watcher, RecursiveMode, recommended_watcher, EventKind};
 
-use openfuse_core::crypto;
+use openfused_core::crypto;
 
 pub fn watch_store(store_root: &Path) -> Result<()> {
     let inbox_dir = store_root.join("inbox");

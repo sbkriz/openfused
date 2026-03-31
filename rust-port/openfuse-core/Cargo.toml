@@ -1,17 +1,17 @@
 [package]
-name = "openfuse-core"
-version = "0.3.23"
+name = "openfused-core"
+version = "0.4.2"
 edition = "2021"
 description = "Core library for OpenFused — crypto, store, message types. Compiles to wasm32-wasip1."
 license = "MIT"
 repository = "https://github.com/openfused/openfused"
 
 [lib]
-name = "openfuse_core"
+name = "openfused_core"
 path = "src/lib.rs"
 
 [[bin]]
-name = "openfuse-core"
+name = "openfused-core"
 path = "src/main.rs"
 
 [dependencies]

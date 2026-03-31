@@ -1,4 +1,4 @@
-// TypeScript wrapper for openfuse-core WASM module.
+// TypeScript wrapper for openfused-core WASM module.
 // Loads the compiled wasm32-wasip1 binary and calls it via node:wasi.
 // All crypto + store operations go through Rust WASM.
 // Networking (sync, registry, watch) stays in Node.js.
@@ -15,7 +15,7 @@ let cachedModule: WebAssembly.Module | null = null;
 
 function getWasmPath(): string {
   const dir = dirname(fileURLToPath(import.meta.url));
-  return join(dir, "..", "wasm", "openfuse-core.wasm");
+  return join(dir, "..", "wasm", "openfused-core.wasm");
 }
 
 function getModule(): WebAssembly.Module {
@@ -44,7 +44,7 @@ async function callWasm(storeRoot: string, args: string[]): Promise<WasiCallResu
   try {
     const wasi = new WASI({
       version: "preview1",
-      args: ["openfuse-core", ...args],
+      args: ["openfused-core", ...args],
       env: { OPENFUSE_STORE: storeRoot },
       preopens: {
         "/store": storeRoot,

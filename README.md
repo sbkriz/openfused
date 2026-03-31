@@ -17,7 +17,7 @@ Review the source at [github.com/openfused/openfused](https://github.com/openfus
 npm install -g openfused
 
 # Rust (crates.io) — package: openfuse
-cargo install openfuse
+cargo install openfused
 
 # Docker (daemon)
 docker compose up
