@@ -138,6 +138,7 @@ inbox
   .description("List inbox messages")
   .option("-d, --dir <path>", "Context store directory", ".")
   .option("--raw", "Show raw content instead of wrapped")
+  .option("--all", "Show all messages including unverified (default: verified only)")
   .option("--no-sync", "Skip pulling from remote peers before listing")
   .action(async (opts) => {
     const store = new ContextStore(resolve(opts.dir));
@@ -151,9 +152,18 @@ inbox
         }
       } catch {}
     }
-    const messages = await store.readInbox();
-    if (messages.length === 0) {
+    const allMessages = await store.readInbox();
+    // Default: only show verified messages. Unverified messages from unknown
+    // senders are hidden to prevent prompt injection. Use --all to see them.
+    const messages = opts.all ? allMessages : allMessages.filter((m: any) => m.verified);
+    const hidden = allMessages.length - messages.length;
+    if (messages.length === 0 && hidden === 0) {
       console.log("Inbox is empty.");
+      return;
+    }
+    if (messages.length === 0 && hidden > 0) {
+      console.log(`Inbox has ${hidden} unverified message(s) from untrusted senders.`);
+      console.log(`Run with --all to see them, or trust the sender: openfuse key trust <name>`);
       return;
     }
     for (const msg of messages) {
@@ -161,6 +171,9 @@ inbox
       const enc = msg.encrypted ? " [ENCRYPTED]" : "";
       console.log(`\n--- ${badge}${enc} From: ${msg.from} | ${msg.time} ---`);
       console.log(opts.raw ? msg.content : msg.wrappedContent);
+    }
+    if (hidden > 0) {
+      console.log(`\n(${hidden} unverified message(s) hidden — use --all to show)`);
     }
   });
 
