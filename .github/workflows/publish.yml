@@ -42,7 +42,7 @@ jobs:
         run: |
           VERSION=${GITHUB_REF_NAME#v}
           # Version sync
-          for f in rust-port/openfuse-core/Cargo.toml rust-port/openfuse-cli/Cargo.toml daemon/Cargo.toml; do
+          for f in rust-port/openfuse-core/Cargo.toml rust-port/openfuse-cli/Cargo.toml rust-port/openfuse-daemon/Cargo.toml; do
             sed -i "0,/^version = /s/^version = \".*\"/version = \"$VERSION\"/" "$f"
           done
           # Publish core first — temporarily remove CLI from workspace to avoid
@@ -90,7 +90,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v5
         with:
-          context: ./daemon
+          context: ./rust-port/openfuse-daemon
           push: true
           tags: |
             ghcr.io/openfused/openfused:latest

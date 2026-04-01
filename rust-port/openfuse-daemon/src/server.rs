@@ -11,10 +11,7 @@ use axum::{
 };
 use subtle::ConstantTimeEq;
 use tokio_stream::wrappers::ReceiverStream;
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rand::RngCore;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -717,7 +714,7 @@ async fn receive_inbox(
         .await
         .map(|c| c.name)
         .unwrap_or_else(|| "unknown".to_string());
-    let sender_fp = &hex::encode(sha2::Sha256::digest(public_key.as_bytes()))[..8];
+    let sender_fp = &openfused_core::crypto::sha256_fingerprint_short(public_key);
     let ts = chrono::Utc::now()
         .to_rfc3339()
         .replace([':', '.'], "-");
@@ -779,10 +776,7 @@ async fn get_outbox(
         return Err(StatusCode::FORBIDDEN);
     }
 
-    let requester_fp = {
-        let hash = Sha256::digest(pubkey_hex.as_bytes());
-        hex::encode(&hash[..4]).to_uppercase()
-    };
+    let requester_fp = openfused_core::crypto::sha256_fingerprint_short(pubkey_hex).to_uppercase();
 
     let outbox_dir = store.root.join("outbox");
     let mut messages = vec![];
@@ -930,10 +924,7 @@ async fn ack_outbox(
         let expected_prefix = format!("{}-", safe_name);
         if subdir.starts_with(&expected_prefix) {
             let dir_fp = &subdir[expected_prefix.len()..];
-            let requester_fp = {
-                let hash = Sha256::digest(pubkey_hex.as_bytes());
-                hex::encode(&hash[..4]).to_uppercase()
-            };
+            let requester_fp = openfused_core::crypto::sha256_fingerprint_short(pubkey_hex).to_uppercase();
             if !dir_fp.eq_ignore_ascii_case(&requester_fp) {
                 tracing::warn!(
                     "ACK fingerprint mismatch: dir={}, requester={}",
@@ -989,23 +980,7 @@ async fn verify_key_ownership(store: &Arc<ContextStore>, name: &str, pubkey_hex:
 }
 
 fn verify_challenge(challenge: &str, sig_b64: &str, pubkey_hex: &str) -> bool {
-    let Ok(key_bytes) = hex::decode(pubkey_hex.trim()) else {
-        return false;
-    };
-    let Ok(arr): Result<[u8; 32], _> = key_bytes.try_into() else {
-        return false;
-    };
-    let Ok(verifying_key) = VerifyingKey::from_bytes(&arr) else {
-        return false;
-    };
-    let Ok(sig_bytes) = BASE64.decode(sig_b64) else {
-        return false;
-    };
-    let Ok(sig_arr): Result<[u8; 64], _> = sig_bytes.try_into() else {
-        return false;
-    };
-    let signature = Signature::from_bytes(&sig_arr);
-    verifying_key.verify(challenge.as_bytes(), &signature).is_ok()
+    openfused_core::crypto::verify_ed25519_signature(challenge.as_bytes(), sig_b64, pubkey_hex)
 }
 
 fn verify_signature(
@@ -1015,24 +990,8 @@ fn verify_signature(
     sig_b64: &str,
     pubkey_hex: &str,
 ) -> bool {
-    let Ok(key_bytes) = hex::decode(pubkey_hex.trim()) else {
-        return false;
-    };
-    let Ok(arr): Result<[u8; 32], _> = key_bytes.try_into() else {
-        return false;
-    };
-    let Ok(verifying_key) = VerifyingKey::from_bytes(&arr) else {
-        return false;
-    };
-    let Ok(sig_bytes) = BASE64.decode(sig_b64) else {
-        return false;
-    };
-    let Ok(sig_arr): Result<[u8; 64], _> = sig_bytes.try_into() else {
-        return false;
-    };
-    let signature = Signature::from_bytes(&sig_arr);
     let payload = format!("{}\n{}\n{}", from, timestamp, message);
-    verifying_key.verify(payload.as_bytes(), &signature).is_ok()
+    openfused_core::crypto::verify_ed25519_signature(payload.as_bytes(), sig_b64, pubkey_hex)
 }
 
 // ---------------------------------------------------------------------------

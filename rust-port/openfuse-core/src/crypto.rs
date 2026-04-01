@@ -271,3 +271,24 @@ pub fn wrap_external_message(signed: &SignedMessage, verified: bool) -> String {
         esc(&signed.from), verified, esc(&signed.timestamp), status, esc(&signed.message)
     )
 }
+
+// ---------------------------------------------------------------------------
+// Shared verification utilities (used by daemon + CLI)
+// ---------------------------------------------------------------------------
+
+/// Verify an Ed25519 signature over arbitrary bytes.
+/// Used by the daemon for both message verification and outbox challenge auth.
+pub fn verify_ed25519_signature(message: &[u8], sig_b64: &str, pubkey_hex: &str) -> bool {
+    let Ok(key_bytes) = hex::decode(pubkey_hex.trim()) else { return false };
+    let Ok(arr): Result<[u8; 32], _> = key_bytes.try_into() else { return false };
+    let Ok(verifying_key) = VerifyingKey::from_bytes(&arr) else { return false };
+    let Ok(sig_bytes) = BASE64.decode(sig_b64) else { return false };
+    let Ok(sig_arr): Result<[u8; 64], _> = sig_bytes.try_into() else { return false };
+    let signature = Signature::from_bytes(&sig_arr);
+    verifying_key.verify(message, &signature).is_ok()
+}
+
+/// Compute the first 8 hex chars of SHA-256 of a string (used for sender fingerprints).
+pub fn sha256_fingerprint_short(input: &str) -> String {
+    hex::encode(&Sha256::digest(input.as_bytes())[..4])
+}

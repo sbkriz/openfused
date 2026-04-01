@@ -1,5 +1,5 @@
 [package]
-name = "openfused"
+name = "openfused-daemon"
 version = "0.4.4"
 publish = false
 edition = "2021"
@@ -7,16 +7,16 @@ description = "HTTP daemon for OpenFused — authenticated agent-to-agent messag
 license = "MIT"
 repository = "https://github.com/openfused/openfused"
 
+[[bin]]
+name = "openfused"
+path = "src/main.rs"
+
 [dependencies]
+openfused-core = { path = "../openfuse-core" }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive", "env"] }
-ed25519-dalek = { version = "2", features = ["rand_core"] }
-rand = "0.8"
-base64 = "0.22"
-hex = "0.4"
-sha2 = "0.10"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 axum = { version = "0.8", features = ["json"] }
@@ -25,6 +25,8 @@ tower-http = { version = "0.6", features = ["cors"] }
 tokio-stream = "0.1"
 notify = "7"
 subtle = "2"
+hex = "0.4"
+rand = "0.8"
 fs2 = "0.4"
 
 [profile.release]

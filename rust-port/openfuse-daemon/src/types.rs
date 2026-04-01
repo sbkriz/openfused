@@ -378,50 +378,10 @@ impl ProblemDetail {
 }
 
 // ---------------------------------------------------------------------------
-// Store config types (kept here to avoid circular deps)
+// Store config types — imported from openfused-core (single source of truth)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct KeyringEntry {
-    pub name: String,
-    #[serde(default)]
-    pub address: String,
-    #[serde(rename = "signingKey")]
-    pub signing_key: String,
-    #[serde(default, rename = "encryptionKey")]
-    pub encryption_key: Option<String>,
-    #[serde(default)]
-    pub fingerprint: String,
-    #[serde(default)]
-    pub trusted: bool,
-    #[serde(default)]
-    pub added: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct MeshConfig {
-    pub id: String,
-    pub name: String,
-    pub created: String,
-    #[serde(default, rename = "publicKey")]
-    pub public_key: Option<String>,
-    #[serde(default, rename = "encryptionKey")]
-    pub encryption_key: Option<String>,
-    #[serde(default)]
-    pub peers: Vec<PeerConfig>,
-    #[serde(default)]
-    pub keyring: Vec<KeyringEntry>,
-    #[serde(default)]
-    pub trusted_keys: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PeerConfig {
-    pub id: String,
-    pub name: String,
-    pub url: String,
-    pub access: String,
-}
+pub use openfused_core::MeshConfig;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileEntry {
