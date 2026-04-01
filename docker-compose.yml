@@ -5,7 +5,9 @@
 
 services:
   daemon:
-    build: ./rust-port/openfuse-daemon
+    build:
+      context: ./rust-port
+      dockerfile: openfuse-daemon/Dockerfile
     ports:
       - "2053:2053"
     volumes:

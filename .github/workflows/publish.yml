@@ -90,7 +90,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v5
         with:
-          context: ./rust-port/openfuse-daemon
+          context: ./rust-port
+          file: ./rust-port/openfuse-daemon/Dockerfile
           push: true
           tags: |
             ghcr.io/openfused/openfused:latest
